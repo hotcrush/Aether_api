@@ -1,0 +1,375 @@
+/* ── Quota & Usage Windows ── */
+
+.quota-cell {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-cell-state {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.quota-cell-error {
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.quota-error-copy {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: #9d5961;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.quota-error-copy svg {
+  flex: 0 0 auto;
+  color: var(--danger);
+}
+
+.quota-error-copy span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quota-cell-empty,
+.quota-cell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.quota-call-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.quota-call-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quota-api-key-meta {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+}
+
+.quota-plan {
+  color: #67531f;
+  font-weight: 680;
+  text-transform: capitalize;
+}
+
+.quota-query,
+.quota-refresh {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid #dce2e7;
+  border-radius: 5px;
+  background: #fff;
+  color: #52616d;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.quota-query:hover,
+.quota-refresh:hover {
+  border-color: #aebac4;
+  background: #f7f9fb;
+  color: #274f8d;
+}
+
+.quota-refresh {
+  width: 23px;
+  height: 23px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+/* Usage windows */
+.usage-windows {
+  display: grid;
+  gap: 6px;
+}
+
+.usage-window {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.usage-window-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.uw-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #f0f2f5;
+  color: #53616c;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.uw-badge-allowed {
+  background: #e7f5ef;
+  color: #197158;
+}
+
+.uw-badge-used {
+  background: #fef3e2;
+  color: #9a6b1e;
+}
+
+.usage-window-bar {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  grid-template-columns: 24px minmax(42px, 1fr) 38px 48px;
+  gap: 6px;
+  color: #53616c;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.usage-window-label {
+  display: inline-grid;
+  height: 16px;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.usage-window-label.short {
+  background: #e7f5ef;
+  color: #197158;
+}
+
+.usage-window-label.long {
+  background: #e9f0fb;
+  color: #315f9e;
+}
+
+.usage-window-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #e5e9ed;
+}
+
+.usage-window-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.usage-window-track.healthy span {
+  background: #2f9b78;
+}
+
+.usage-window-track.warning span {
+  background: #c58b2b;
+}
+
+.usage-window-track.critical span {
+  background: #c95761;
+}
+
+.usage-window strong {
+  color: #34414b;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.usage-window-reset {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quota-no-window {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.empty-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  color: #7c8790;
+}
+
+/* ── Relay Usage Panel ── */
+
+.relay-usage {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.relay-usage-values {
+  display: grid;
+  gap: 3px;
+}
+
+.relay-cost-line {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  line-height: 1.4;
+}
+
+.relay-cost-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.relay-cost-value {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.relay-cost-value.warning {
+  color: #b87a1a;
+}
+
+.relay-cost-value.critical {
+  color: #b94a52;
+}
+
+.relay-quota {
+  display: grid;
+  gap: 4px;
+}
+
+.relay-quota-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e5e9ed;
+}
+
+.relay-quota-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.4s ease;
+}
+
+.relay-quota-track.healthy span {
+  background: #2f9b78;
+}
+
+.relay-quota-track.warning span {
+  background: #c58b2b;
+}
+
+.relay-quota-track.critical span {
+  background: #c95761;
+}
+
+.relay-usage-empty {
+  gap: 5px;
+}
+
+.relay-usage-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.relay-usage-state svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.relay-usage-state span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relay-inline-refresh {
+  margin-left: auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0.5;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.relay-inline-refresh:hover {
+  opacity: 1;
+  background: #eef2f3;
+  color: var(--text);
+}
