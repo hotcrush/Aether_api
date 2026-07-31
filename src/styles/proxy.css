@@ -165,6 +165,8 @@
 
 .stat-quota .stat-value {
   color: var(--primary);
+  font-size: clamp(16px, 1.45vw, 19px);
+  white-space: nowrap;
 }
 
 .quota-secondary {

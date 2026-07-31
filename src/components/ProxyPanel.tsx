@@ -124,8 +124,14 @@ interface QuotaAggregate {
   oauthEligible: number
   oauthKnown: number
   oauthShortRemaining: number
+  oauthShortAmountKnown: number
+  oauthShortRemainingAmount: number
+  oauthShortTotalAmount: number
   oauthLongKnown: number
   oauthLongRemaining: number
+  oauthLongAmountKnown: number
+  oauthLongRemainingAmount: number
+  oauthLongTotalAmount: number
   relayEligible: number
   relayKnown: number
   relayRemaining: number
@@ -141,8 +147,14 @@ function summarizeQuota(
     oauthEligible: 0,
     oauthKnown: 0,
     oauthShortRemaining: 0,
+    oauthShortAmountKnown: 0,
+    oauthShortRemainingAmount: 0,
+    oauthShortTotalAmount: 0,
     oauthLongKnown: 0,
     oauthLongRemaining: 0,
+    oauthLongAmountKnown: 0,
+    oauthLongRemainingAmount: 0,
+    oauthLongTotalAmount: 0,
     relayEligible: 0,
     relayKnown: 0,
     relayRemaining: 0,
@@ -161,10 +173,22 @@ function summarizeQuota(
         summary.oauthKnown += 1
         summary.oauthShortRemaining += shortRemaining / 100
       }
+      const shortAmount = quotaAmount(shortWindow)
+      if (shortAmount) {
+        summary.oauthShortAmountKnown += 1
+        summary.oauthShortRemainingAmount += shortAmount.remaining
+        summary.oauthShortTotalAmount += shortAmount.total
+      }
       const longRemaining = remainingPercent(longWindow)
       if (longRemaining !== null) {
         summary.oauthLongKnown += 1
         summary.oauthLongRemaining += longRemaining / 100
+      }
+      const longAmount = quotaAmount(longWindow)
+      if (longAmount) {
+        summary.oauthLongAmountKnown += 1
+        summary.oauthLongRemainingAmount += longAmount.remaining
+        summary.oauthLongTotalAmount += longAmount.total
       }
       continue
     }
@@ -187,6 +211,18 @@ function quotaSummaryDisplay(summary: QuotaAggregate) {
   const relayValue = summary.relayKnown > 0
     ? `${formatUsd(summary.relayRemaining)} / ${formatUsd(summary.relayTotal)}`
     : null
+  if (summary.oauthShortAmountKnown > 0) {
+    const shortValue = `${formatUsd(summary.oauthShortRemainingAmount)} / ${formatUsd(summary.oauthShortTotalAmount)}`
+    const longDescription = summary.oauthLongAmountKnown > 0
+      ? `7d ${formatUsd(summary.oauthLongRemainingAmount)} / ${formatUsd(summary.oauthLongTotalAmount)}`
+      : '7d 暂无金额数据'
+    return {
+      value: shortValue,
+      detail: `OAuth 5h 金额 · ${summary.oauthShortAmountKnown}/${summary.oauthEligible} 已查`,
+      secondary: relayValue ? `中转 ${relayValue}` : null,
+      title: `OAuth 5h 剩余金额 ${shortValue}；${longDescription}。金额按上游返回的 allowed_amount 与 used_amount 汇总。${relayValue ? `中转站剩余 ${relayValue}。` : ''}`,
+    }
+  }
   if (summary.oauthKnown > 0) {
     const shortValue = `${formatQuotaUnits(summary.oauthShortRemaining)} / ${summary.oauthKnown}`
     const longDescription = summary.oauthLongKnown > 0
@@ -245,6 +281,19 @@ function remainingPercent(window: QuotaWindow | null) {
   return used === null ? null : clampPercent(100 - used)
 }
 
+function quotaAmount(window: QuotaWindow | null) {
+  if (!window) return null
+  const total = finiteNumber(window.allowed_amount)
+  if (total === null || total <= 0) return null
+  const used = finiteNumber(window.used_amount)
+  const percent = remainingPercent(window)
+  if (used === null && percent === null) return null
+  return {
+    total,
+    remaining: Math.min(total, Math.max(0, used === null ? total * percent! / 100 : total - used)),
+  }
+}
+
 function finiteNumber(value: number | null | undefined) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
@@ -258,7 +307,7 @@ function formatQuotaUnits(value: number) {
 }
 
 function formatUsd(value: number) {
-  return `$${stripTrailingZeroes(value.toFixed(2))}`
+  return `$${value.toFixed(2)}`
 }
 
 function formatTokenCount(value: number) {
