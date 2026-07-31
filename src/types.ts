@@ -47,6 +47,53 @@ export interface ProxyInfo {
   account_capacities: Record<string, number>
 }
 
+export type RequestLogStatus = 'pending' | 'success' | 'retry' | 'error' | 'cancelled'
+
+export interface RequestLog {
+  id: number
+  request_id: string
+  attempt_index: number
+  account_id: string | null
+  account_name: string
+  account_type: string
+  source: string
+  method: string
+  path: string
+  endpoint_family: string
+  model: string
+  status: RequestLogStatus
+  http_status: number | null
+  streaming: boolean
+  ttfb_ms: number | null
+  duration_ms: number | null
+  input_tokens: number
+  output_tokens: number
+  cached_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  total_tokens: number
+  unpriced_tokens: number
+  estimated_cost: number
+  message: string
+  created_at: string
+  completed_at: string | null
+}
+
+export interface RequestLogQuery {
+  status?: RequestLogStatus
+  account_id?: string
+  source?: string
+  search?: string
+  before_id?: number
+  limit?: number
+}
+
+export interface RequestLogPage {
+  items: RequestLog[]
+  has_more: boolean
+  next_before_id: number | null
+}
+
 export interface CodexTakeoverStatus {
   active: boolean
   backup_available: boolean

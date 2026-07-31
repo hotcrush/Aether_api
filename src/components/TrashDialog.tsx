@@ -102,7 +102,7 @@ export function TrashDialog({ open, onClose, onRestored, notify }: TrashDialogPr
                   <div className="trash-item-actions">
                     <button
                       className="icon-btn"
-                      title="恢复"
+                      data-tooltip="恢复"
                       disabled={busyId === account.id}
                       onClick={() => handleRestore(account)}
                     >
@@ -110,7 +110,7 @@ export function TrashDialog({ open, onClose, onRestored, notify }: TrashDialogPr
                     </button>
                     <button
                       className="icon-btn trash-purge-btn"
-                      title="永久删除"
+                      data-tooltip="永久删除"
                       disabled={busyId === account.id}
                       onClick={() => handlePurge(account)}
                     >

@@ -28,7 +28,7 @@ export function RelayUsagePanel({
         {state?.status === 'loading' ? (
           <><RefreshCw className="spin" size={13} /><span>正在读取用量</span></>
         ) : state?.status === 'error' ? (
-          <><AlertCircle size={13} /><span title={state.error}>{friendlyRelayError(state.error)}</span></>
+          <><AlertCircle size={13} /><span data-tooltip={state.error}>{friendlyRelayError(state.error)}</span></>
         ) : (
           <><Gauge size={13} /><span>{requestCount.toLocaleString()} req · {lastUsedAt || '尚未调用'}</span></>
         )}
@@ -53,7 +53,7 @@ function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuer
         <button
           className="quota-refresh relay-inline-refresh"
           onClick={onQuery}
-          title={`刷新用量，上次查询 ${formatLocalTime(usage.fetched_at)}`}
+          data-tooltip={`刷新用量，上次查询 ${formatLocalTime(usage.fetched_at)}`}
           aria-label="刷新中转站用量"
         >
           <RefreshCw size={11} />

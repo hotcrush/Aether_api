@@ -2,7 +2,7 @@ import type { AccountQuota, QuotaQueryState } from '../types'
 import { getCache, setCache } from './commands'
 
 const CACHE_KEY = 'aether:quota_cache'
-const TTL_MS = 60 * 60 * 1000 // 1 hour
+const FRESH_TTL_MS = 60 * 60 * 1000 // 1 hour
 
 interface CacheEntry {
   quota: AccountQuota
@@ -11,11 +11,50 @@ interface CacheEntry {
 
 type CacheMap = Record<string, CacheEntry>
 
-async function readCache(): Promise<CacheMap> {
+export interface QuotaCacheSnapshot {
+  states: Record<string, QuotaQueryState>
+  staleAccountIds: string[]
+}
+
+export interface QuotaCacheUpdate {
+  accountId: string
+  quota: AccountQuota
+}
+
+let mutationQueue: Promise<void> = Promise.resolve()
+
+function enqueueMutation(operation: () => Promise<void>) {
+  const pending = mutationQueue.then(operation)
+  mutationQueue = pending.catch(() => undefined)
+  return pending
+}
+
+async function readCache(): Promise<CacheMap | null> {
+  let raw: string | null
   try {
-    const raw = await getCache(CACHE_KEY)
-    if (!raw) return {}
-    return JSON.parse(raw) as CacheMap
+    raw = await getCache(CACHE_KEY)
+  } catch {
+    return null
+  }
+  if (!raw) return {}
+
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, CacheEntry] => {
+        const value = entry[1]
+        return Boolean(
+          value
+          && typeof value === 'object'
+          && typeof (value as CacheEntry).cached_at === 'number'
+          && Number.isFinite((value as CacheEntry).cached_at)
+          && (value as CacheEntry).quota
+          && typeof (value as CacheEntry).quota === 'object',
+        )
+      }),
+    )
   } catch {
     return {}
   }
@@ -25,68 +64,57 @@ async function writeCache(cache: CacheMap) {
   try {
     await setCache(CACHE_KEY, JSON.stringify(cache))
   } catch {
-    // DB unavailable – silently ignore
+    // The live result remains usable even when persistent storage is unavailable.
   }
 }
 
-/**
- * Load cached quota states on app startup.
- * Entries older than TTL are discarded.
- */
-export async function loadQuotaCache(): Promise<Record<string, QuotaQueryState>> {
-  const cache = await readCache()
+/** Restore every last-known value and separately report entries due for refresh. */
+export async function loadQuotaCache(): Promise<QuotaCacheSnapshot> {
+  await mutationQueue
+  const cache = await readCache() ?? {}
   const now = Date.now()
-  const result: Record<string, QuotaQueryState> = {}
-  let dirty = false
+  const states: Record<string, QuotaQueryState> = {}
+  const staleAccountIds: string[] = []
 
   for (const [id, entry] of Object.entries(cache)) {
-    if (now - entry.cached_at > TTL_MS) {
-      dirty = true
-      continue
-    }
-    result[id] = { status: 'success', quota: entry.quota }
+    states[id] = { status: 'success', quota: entry.quota }
+    if (now - entry.cached_at > FRESH_TTL_MS) staleAccountIds.push(id)
   }
 
-  if (dirty) {
-    const pruned: CacheMap = {}
-    for (const [id, entry] of Object.entries(cache)) {
-      if (now - entry.cached_at <= TTL_MS) {
-        pruned[id] = entry
-      }
+  return { states, staleAccountIds }
+}
+
+/** Persist one successful quota result without racing other cache updates. */
+export function saveQuotaToCache(accountId: string, quota: AccountQuota) {
+  return saveQuotaBatchToCache([{ accountId, quota }])
+}
+
+/** Merge a complete query batch with one read and one write. */
+export function saveQuotaBatchToCache(updates: readonly QuotaCacheUpdate[]) {
+  if (!updates.length) return Promise.resolve()
+  return enqueueMutation(async () => {
+    const cache = await readCache()
+    if (!cache) return
+    const cachedAt = Date.now()
+    for (const { accountId, quota } of updates) {
+      cache[accountId] = { quota, cached_at: cachedAt }
     }
-    await writeCache(pruned)
-  }
-
-  return result
+    await writeCache(cache)
+  })
 }
 
-/**
- * Persist a successful quota result to cache.
- */
-export async function saveQuotaToCache(accountId: string, quota: AccountQuota) {
-  const cache = await readCache()
-  cache[accountId] = { quota, cached_at: Date.now() }
-  await writeCache(cache)
-}
-
-/**
- * Remove a single account from cache (e.g. on delete).
- */
-export async function removeQuotaFromCache(accountId: string) {
-  const cache = await readCache()
-  if (cache[accountId]) {
+/** Remove a single account from cache (e.g. on delete). */
+export function removeQuotaFromCache(accountId: string) {
+  return enqueueMutation(async () => {
+    const cache = await readCache()
+    if (!cache) return
+    if (!cache[accountId]) return
     delete cache[accountId]
     await writeCache(cache)
-  }
+  })
 }
 
-/**
- * Clear all cached quota data.
- */
-export async function clearQuotaCache() {
-  try {
-    await setCache(CACHE_KEY, '{}')
-  } catch {
-    // ignore
-  }
+/** Clear all cached quota data in sequence with pending updates. */
+export function clearQuotaCache() {
+  return enqueueMutation(() => writeCache({}))
 }

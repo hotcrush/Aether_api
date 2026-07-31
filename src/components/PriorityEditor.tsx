@@ -55,7 +55,7 @@ export function PriorityEditor({
         onMouseDown={(event) => event.preventDefault()}
         onClick={save}
         disabled={!changed || busy}
-        title="保存优先级"
+        data-tooltip="保存优先级"
         aria-label="保存优先级"
         tabIndex={changed ? 0 : -1}
       >

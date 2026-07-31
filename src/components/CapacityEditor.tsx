@@ -1,4 +1,4 @@
-import { Check, Gauge, RefreshCw } from 'lucide-react'
+import { Check, Grid2X2, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 interface CapacityEditorProps {
@@ -26,17 +26,18 @@ export function CapacityEditor({
   const valid = value.trim() !== '' && Number.isInteger(parsed) && parsed >= 1 && parsed <= 1000
   const changed = valid && parsed !== limit
   const full = current >= limit
+  const active = current > 0 && !full
   const save = () => {
     if (changed && !busy) onSave(parsed)
   }
 
   return (
     <div
-      className={`capacity-editor${full ? ' full' : ''}${valid ? '' : ' invalid'}`}
-      title={`当前有 ${current} 个经过 Aether 的活跃请求，最多允许 ${limit} 个并发`}
+      className={`capacity-editor${active ? ' active' : ''}${full ? ' full' : ''}${valid ? '' : ' invalid'}`}
+      data-tooltip={`当前占用 ${current} / ${limit} 个并发槽位；点击上限可修改`}
     >
-      <Gauge size={12} aria-hidden="true" />
-      <span className="capacity-current">{current}</span>
+      <Grid2X2 size={12} aria-hidden="true" />
+      <span className="capacity-current" aria-live="polite">{current}</span>
       <span className="capacity-divider">/</span>
       <input
         type="number"
@@ -63,7 +64,7 @@ export function CapacityEditor({
         onMouseDown={(event) => event.preventDefault()}
         onClick={save}
         disabled={!changed || busy}
-        title="保存容量"
+        data-tooltip="保存容量"
         aria-label="保存容量"
         tabIndex={changed ? 0 : -1}
       >

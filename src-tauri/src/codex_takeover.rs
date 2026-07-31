@@ -50,9 +50,9 @@ pub fn takeover_status(db: &Db, proxy_base_url: &str) -> Result<CodexTakeoverSta
     let expected_base_url = normalize_url(proxy_base_url);
     let active = provider_id.as_deref() == Some(AETHER_PROVIDER_ID)
         && configured_base_url
-        .as_deref()
-        .map(normalize_url)
-        .is_some_and(|base_url| base_url == expected_base_url);
+            .as_deref()
+            .map(normalize_url)
+            .is_some_and(|base_url| base_url == expected_base_url);
     Ok(CodexTakeoverStatus {
         active,
         backup_available: db

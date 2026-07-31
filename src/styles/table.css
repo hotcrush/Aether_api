@@ -184,41 +184,10 @@ td.col-status {
   font-variant-numeric: tabular-nums;
 }
 
-/* Error tooltip */
+/* Structured error tooltip trigger */
 .error-tip-wrap {
   position: relative;
   cursor: help;
-}
-
-.error-tip-wrap .error-text {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-decoration: underline dotted var(--danger) 1px;
-  text-underline-offset: 2px;
-}
-
-.error-tip-fixed {
-  position: fixed;
-  z-index: 9999;
-  min-width: 260px;
-  max-width: 380px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #1e2a36;
-  color: #eef2f6;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-line;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  pointer-events: none;
-  animation: tip-in 0.12s ease both;
-}
-
-@keyframes tip-in {
-  from { opacity: 0; transform: translateY(-100%) translateY(4px); }
-  to { opacity: 1; transform: translateY(-100%) translateY(0); }
 }
 
 /* Badges */
@@ -488,9 +457,23 @@ td.col-status {
   color: #778592;
 }
 
+.capacity-editor.active {
+  border-color: #ecd9a5;
+  background: #fff7df;
+  color: #9a6500;
+}
+
+.capacity-editor.active > svg {
+  color: #b27a12;
+}
+
 .capacity-editor.full {
   border-color: #f1c7c7;
   background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.capacity-editor.full > svg {
   color: var(--danger);
 }
 

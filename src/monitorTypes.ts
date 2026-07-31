@@ -11,7 +11,7 @@ export interface ChannelMonitorEvent {
   duration_ms: number | null
   endpoint_family: string
   model: string
-  source: 'traffic' | 'probe'
+  source: string
   message: string
   estimated_cost: number | null
   created_at: number | string

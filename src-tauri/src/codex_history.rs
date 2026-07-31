@@ -90,12 +90,8 @@ pub fn migrate_existing_history(
     let backup_root = migration_backup_root(app_data_dir, HISTORY_MIGRATION_NAME);
     let migrated_jsonl_files =
         migrate_codex_jsonl_files(&codex_dir, &source_provider_ids, &backup_root)?;
-    let migrated_state_rows = migrate_codex_state_dbs(
-        &codex_dir,
-        &config_text,
-        &source_provider_ids,
-        &backup_root,
-    )?;
+    let migrated_state_rows =
+        migrate_codex_state_dbs(&codex_dir, &config_text, &source_provider_ids, &backup_root)?;
     write_backup_generation_meta(&backup_root, &canonical_dir_string(&codex_dir))?;
 
     if migrated_jsonl_files == 0 && migrated_state_rows == 0 {
@@ -344,8 +340,7 @@ fn collect_official_session_ids_from_backup(path: &Path, session_ids: &mut HashS
         let Some(payload) = value.get("payload") else {
             continue;
         };
-        if payload.get("model_provider").and_then(Value::as_str)
-            != Some(OFFICIAL_CODEX_PROVIDER_ID)
+        if payload.get("model_provider").and_then(Value::as_str) != Some(OFFICIAL_CODEX_PROVIDER_ID)
         {
             continue;
         }
@@ -356,8 +351,7 @@ fn collect_official_session_ids_from_backup(path: &Path, session_ids: &mut HashS
 }
 
 fn collect_official_thread_ids_from_backup(db_path: &Path, thread_ids: &mut BTreeSet<String>) {
-    let Ok(conn) =
-        Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let Ok(conn) = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
     else {
         return;
     };
@@ -445,8 +439,8 @@ fn rewrite_codex_session_file_lines(
     backup_root: &Path,
     rewrite_line: impl Fn(&str) -> Option<String>,
 ) -> Result<bool, String> {
-    let metadata_before =
-        std::fs::metadata(path).map_err(|error| format!("读取 {} 元数据失败: {error}", path.display()))?;
+    let metadata_before = std::fs::metadata(path)
+        .map_err(|error| format!("读取 {} 元数据失败: {error}", path.display()))?;
     let modified_before = metadata_before.modified().ok();
     let len_before = metadata_before.len();
     let content = std::fs::read_to_string(path)
@@ -484,10 +478,13 @@ fn ensure_codex_session_file_unchanged(
     modified_before: Option<SystemTime>,
     len_before: u64,
 ) -> Result<(), String> {
-    let metadata_after =
-        std::fs::metadata(path).map_err(|error| format!("读取 {} 元数据失败: {error}", path.display()))?;
+    let metadata_after = std::fs::metadata(path)
+        .map_err(|error| format!("读取 {} 元数据失败: {error}", path.display()))?;
     if metadata_after.modified().ok() != modified_before || metadata_after.len() != len_before {
-        return Err(format!("Codex 会话文件迁移期间发生变化: {}", path.display()));
+        return Err(format!(
+            "Codex 会话文件迁移期间发生变化: {}",
+            path.display()
+        ));
     }
     Ok(())
 }
@@ -568,8 +565,8 @@ fn migrate_codex_state_db_provider_bucket(
     if !db_path.exists() || source_provider_ids.is_empty() {
         return Ok(0);
     }
-    let mut conn = Connection::open(db_path)
-        .map_err(|error| format!("打开 Codex state DB 失败: {error}"))?;
+    let mut conn =
+        Connection::open(db_path).map_err(|error| format!("打开 Codex state DB 失败: {error}"))?;
     conn.busy_timeout(Duration::from_secs(5))
         .map_err(|error| format!("设置 Codex state DB busy_timeout 失败: {error}"))?;
     if !table_exists(&conn, "threads")? || !column_exists(&conn, "threads", "model_provider")? {
@@ -616,8 +613,8 @@ fn restore_codex_state_db_official_threads(
     if !db_path.exists() || official_thread_ids.is_empty() {
         return Ok(0);
     }
-    let mut conn = Connection::open(db_path)
-        .map_err(|error| format!("打开 Codex state DB 失败: {error}"))?;
+    let mut conn =
+        Connection::open(db_path).map_err(|error| format!("打开 Codex state DB 失败: {error}"))?;
     conn.busy_timeout(Duration::from_secs(5))
         .map_err(|error| format!("设置 Codex state DB busy_timeout 失败: {error}"))?;
     if !table_exists(&conn, "threads")? || !column_exists(&conn, "threads", "model_provider")? {
@@ -635,7 +632,9 @@ fn restore_codex_state_db_official_threads(
         values.push(UNIFIED_CODEX_PROVIDER_ID.to_string());
         values.extend(chunk.iter().map(|id| (*id).clone()));
         let count: i64 = conn
-            .query_row(&count_sql, params_from_iter(values.iter()), |row| row.get(0))
+            .query_row(&count_sql, params_from_iter(values.iter()), |row| {
+                row.get(0)
+            })
             .map_err(|error| format!("统计 Codex state DB 待还原行失败: {error}"))?;
         matching_rows += count;
     }
@@ -685,7 +684,8 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, S
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(|error| format!("读取 Codex state DB 字段信息失败: {error}"))?;
     for name in rows {
-        if name.map_err(|error| format!("读取 Codex state DB 字段信息失败: {error}"))? == column {
+        if name.map_err(|error| format!("读取 Codex state DB 字段信息失败: {error}"))? == column
+        {
             return Ok(true);
         }
     }
@@ -699,7 +699,11 @@ fn placeholders(count: usize) -> String {
         .join(", ")
 }
 
-fn backup_codex_jsonl_file(path: &Path, codex_dir: &Path, backup_root: &Path) -> Result<(), String> {
+fn backup_codex_jsonl_file(
+    path: &Path,
+    codex_dir: &Path,
+    backup_root: &Path,
+) -> Result<(), String> {
     let backup_path = backup_root
         .join("jsonl")
         .join(relative_backup_path(path, codex_dir));
@@ -754,7 +758,9 @@ fn relative_backup_path(path: &Path, codex_dir: &Path) -> PathBuf {
     let mut out = PathBuf::from("external");
     for component in path.components() {
         match component {
-            Component::Prefix(prefix) => out.push(sanitize_component(&prefix.as_os_str().to_string_lossy())),
+            Component::Prefix(prefix) => {
+                out.push(sanitize_component(&prefix.as_os_str().to_string_lossy()))
+            }
             Component::RootDir => out.push("_root"),
             Component::Normal(value) => out.push(sanitize_component(&value.to_string_lossy())),
             Component::CurDir | Component::ParentDir => {}
@@ -788,13 +794,16 @@ mod tests {
         ])
         .into_iter()
         .collect::<HashSet<_>>();
-        let line = r#"{"type":"session_meta","payload":{"id":"thread-1","model_provider":"openai"}}"#;
+        let line =
+            r#"{"type":"session_meta","payload":{"id":"thread-1","model_provider":"openai"}}"#;
 
         let rewritten = rewrite_codex_session_meta_line(line, &sources).unwrap();
         let value: Value = serde_json::from_str(&rewritten).unwrap();
 
         assert_eq!(
-            value.pointer("/payload/model_provider").and_then(Value::as_str),
+            value
+                .pointer("/payload/model_provider")
+                .and_then(Value::as_str),
             Some(UNIFIED_CODEX_PROVIDER_ID)
         );
     }
@@ -803,14 +812,18 @@ mod tests {
     fn restore_only_rewrites_ledgered_official_sessions() {
         let mut session_ids = HashSet::new();
         session_ids.insert("thread-1".to_string());
-        let official = r#"{"type":"session_meta","payload":{"id":"thread-1","model_provider":"custom"}}"#;
-        let third_party = r#"{"type":"session_meta","payload":{"id":"thread-2","model_provider":"custom"}}"#;
+        let official =
+            r#"{"type":"session_meta","payload":{"id":"thread-1","model_provider":"custom"}}"#;
+        let third_party =
+            r#"{"type":"session_meta","payload":{"id":"thread-2","model_provider":"custom"}}"#;
 
         let restored = rewrite_codex_session_meta_line_for_restore(official, &session_ids).unwrap();
         let value: Value = serde_json::from_str(&restored).unwrap();
 
         assert_eq!(
-            value.pointer("/payload/model_provider").and_then(Value::as_str),
+            value
+                .pointer("/payload/model_provider")
+                .and_then(Value::as_str),
             Some(OFFICIAL_CODEX_PROVIDER_ID)
         );
         assert!(rewrite_codex_session_meta_line_for_restore(third_party, &session_ids).is_none());

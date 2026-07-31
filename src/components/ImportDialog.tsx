@@ -183,7 +183,7 @@ export function ImportDialog({
                 <button
                   className="icon-btn"
                   onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                  title="移除"
+                  data-tooltip="移除"
                   aria-label={`移除 ${file.name}`}
                 >
                   <X size={14} />

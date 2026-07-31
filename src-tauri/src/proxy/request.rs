@@ -1,0 +1,620 @@
+use super::*;
+
+pub(super) async fn enforce_content_length_limit(
+    State(limit_state): State<BodyLimitMiddlewareState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let content_length = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if content_length.is_some_and(|length| length > limit_state.limit as u64) {
+        let capability = RequestCapability::from_request(request.uri(), &[]);
+        let log_context = ProxyRequestLogContext::new(
+            &limit_state.proxy,
+            request.method(),
+            request.uri(),
+            &capability,
+            false,
+        );
+        let message = request_body_limit_message(limit_state.limit);
+        log_context.record_local_failure(StatusCode::PAYLOAD_TOO_LARGE, &message);
+        return request_body_limit_response(limit_state.limit);
+    }
+    next.run(request).await
+}
+
+pub(super) async fn proxy_handler(
+    State(state): State<Arc<ProxyState>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    Extension(body_limit): Extension<ProxyRequestBodyLimit>,
+    body: Result<Bytes, axum::extract::rejection::BytesRejection>,
+) -> Response {
+    if method == Method::OPTIONS {
+        return Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(Body::empty())
+            .unwrap();
+    }
+    if uri.path() == "/health" {
+        return json_response(StatusCode::OK, json!({"status": "ok"}));
+    }
+
+    let body = match body {
+        Ok(body) => body,
+        Err(rejection) => {
+            let rejection_status = rejection.into_response().status();
+            let capability = RequestCapability::from_request(&uri, &[]);
+            let request_log =
+                ProxyRequestLogContext::new(&state, &method, &uri, &capability, false);
+            if rejection_status == StatusCode::PAYLOAD_TOO_LARGE {
+                let message = request_body_limit_message(body_limit.0);
+                request_log.record_local_failure(StatusCode::PAYLOAD_TOO_LARGE, &message);
+                return request_body_limit_response(body_limit.0);
+            }
+            request_log
+                .record_local_failure(StatusCode::BAD_REQUEST, "failed to read request body");
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "failed to read request body",
+                "invalid_request_error",
+            );
+        }
+    };
+
+    let capability = RequestCapability::from_request(&uri, &body);
+    let requested_stream = !is_compact_path(uri.path()) && request_wants_stream(&body);
+    let request_log =
+        ProxyRequestLogContext::new(&state, &method, &uri, &capability, requested_stream);
+    let authorized_request = {
+        let access_token = state.access_token.load();
+        authorized(&headers, access_token.as_str())
+    };
+    if !authorized_request {
+        request_log.record_local_failure(StatusCode::UNAUTHORIZED, "invalid local access token");
+        return json_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid local access token",
+            "authentication_error",
+        );
+    }
+
+    let accounts = match state.db.get_active_accounts_async().await {
+        Ok(accounts) => accounts,
+        Err(error) => {
+            warn!("读取账号失败: {error}");
+            request_log
+                .record_local_failure(StatusCode::INTERNAL_SERVER_ERROR, "failed to load accounts");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load accounts",
+                "server_error",
+            );
+        }
+    };
+    if accounts.is_empty() {
+        request_log
+            .record_local_failure(StatusCode::SERVICE_UNAVAILABLE, "no active OpenAI accounts");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no active OpenAI accounts",
+            "server_error",
+        );
+    }
+
+    let accounts = accounts
+        .into_iter()
+        .filter(|account| account_supports_request(account, &capability))
+        .collect::<Vec<_>>();
+    if accounts.is_empty() {
+        request_log.record_local_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no active account supports this endpoint",
+        );
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no active account supports this endpoint",
+            "server_error",
+        );
+    }
+
+    let route_key = request_route_key(&headers, &body);
+    let (accounts, retry_after) = state.ordered_accounts(accounts, route_key, &capability);
+    if accounts.is_empty() {
+        request_log.record_local_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "all active accounts are temporarily cooling down",
+        );
+        return cooling_down_response(retry_after);
+    }
+
+    let model_hint = capability.model.clone();
+    let startup_deadline = tokio::time::Instant::now() + REQUEST_STARTUP_BUDGET;
+    let mut last_error = "all upstream accounts failed".to_string();
+    let mut attempted_accounts = 0;
+    let mut pending_retry: Option<(RequestLogHandle, String)> = None;
+
+    'accounts: for account in &accounts {
+        if attempted_accounts >= MAX_ACCOUNT_ATTEMPTS {
+            break;
+        }
+        if tokio::time::Instant::now() >= startup_deadline {
+            last_error = "upstream startup budget exhausted".to_string();
+            break;
+        }
+        let Some(capacity_lease) = state.capacity.try_acquire(&account.id, account.concurrency)
+        else {
+            last_error = "all matching upstream accounts are at capacity".to_string();
+            continue;
+        };
+        if let Some((log, message)) = pending_retry.take() {
+            log.finish("retry", Some(&message));
+        }
+        attempted_accounts += 1;
+        let attempt_log = request_log.begin_attempt(Some(account), attempted_accounts as i64);
+        let mut ready = match tokio::time::timeout_at(
+            startup_deadline,
+            ensure_account_ready(&state, account, false),
+        )
+        .await
+        {
+            Ok(Ok(account)) => account,
+            Ok(Err(error)) => {
+                if let Some(log) = &attempt_log {
+                    pending_retry = Some((log.clone(), error.clone()));
+                }
+                let _ = state.db.set_error_async(&account.id, &error).await;
+                state.cool_down_account(&account.id, Duration::from_secs(60));
+                state.unbind_route(route_key, &account.id);
+                last_error = error;
+                continue;
+            }
+            Err(_) => {
+                let error = format!(
+                    "{}: upstream startup budget exhausted during OAuth refresh",
+                    account.name
+                );
+                if let Some(log) = &attempt_log {
+                    log.finish("error", Some(&error));
+                }
+                let _ = state.db.set_error_async(&account.id, &error).await;
+                state.cool_down_account(&account.id, Duration::from_secs(60));
+                state.unbind_route(route_key, &account.id);
+                last_error = error;
+                break 'accounts;
+            }
+        };
+
+        let mut refreshed_after_unauthorized = false;
+        loop {
+            let response = match tokio::time::timeout_at(
+                startup_deadline,
+                send_upstream(&state.client, &ready, &method, &uri, &headers, &body),
+            )
+            .await
+            {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => match error {
+                    SendUpstreamError::Request(message) => {
+                        if let Some(log) = &attempt_log {
+                            log.mark_response(StatusCode::BAD_REQUEST.as_u16());
+                            log.finish("error", Some(&message));
+                        }
+                        return json_error(
+                            StatusCode::BAD_REQUEST,
+                            &message,
+                            "invalid_request_error",
+                        );
+                    }
+                    SendUpstreamError::Account(message) | SendUpstreamError::Transport(message) => {
+                        if let Some(log) = &attempt_log {
+                            pending_retry = Some((log.clone(), message.clone()));
+                        }
+                        let _ = state.db.set_error_async(&ready.id, &message).await;
+                        state.cool_down_account(&ready.id, Duration::from_secs(20));
+                        state.unbind_route(route_key, &ready.id);
+                        last_error = message;
+                        break;
+                    }
+                },
+                Err(_) => {
+                    let error = format!("{}: upstream startup budget exhausted", ready.name);
+                    if let Some(log) = &attempt_log {
+                        log.finish("error", Some(&error));
+                    }
+                    let _ = state.db.set_error_async(&ready.id, &error).await;
+                    state.cool_down_account(&ready.id, Duration::from_secs(20));
+                    state.unbind_route(route_key, &ready.id);
+                    last_error = error;
+                    break 'accounts;
+                }
+            };
+
+            let status = response.status();
+            if status == StatusCode::UNAUTHORIZED
+                && ready.account_type == "oauth"
+                && !ready.refresh_token.is_empty()
+                && !refreshed_after_unauthorized
+            {
+                refreshed_after_unauthorized = true;
+                match tokio::time::timeout_at(
+                    startup_deadline,
+                    ensure_account_ready(&state, &ready, true),
+                )
+                .await
+                {
+                    Ok(Ok(account)) => {
+                        ready = account;
+                        continue;
+                    }
+                    Ok(Err(error)) => {
+                        if let Some(log) = &attempt_log {
+                            log.mark_response(status.as_u16());
+                            pending_retry = Some((log.clone(), error.clone()));
+                        }
+                        let _ = state.db.set_error_async(&ready.id, &error).await;
+                        state.cool_down_account(&ready.id, Duration::from_secs(300));
+                        state.unbind_route(route_key, &ready.id);
+                        last_error = error;
+                        break;
+                    }
+                    Err(_) => {
+                        let error = format!(
+                            "{}: upstream startup budget exhausted during OAuth refresh",
+                            ready.name
+                        );
+                        if let Some(log) = &attempt_log {
+                            log.mark_response(status.as_u16());
+                            log.finish("error", Some(&error));
+                        }
+                        let _ = state.db.set_error_async(&ready.id, &error).await;
+                        state.cool_down_account(&ready.id, Duration::from_secs(60));
+                        state.unbind_route(route_key, &ready.id);
+                        last_error = error;
+                        break 'accounts;
+                    }
+                }
+            }
+
+            let policy = classify_failure(status, capability.model.is_some());
+            if policy.switch_account {
+                if let Some(log) = &attempt_log {
+                    log.mark_response(status.as_u16());
+                }
+                let cooldown = response_cooldown(status, response.headers());
+                let summary_deadline = std::cmp::min(
+                    startup_deadline,
+                    tokio::time::Instant::now() + UPSTREAM_ERROR_BODY_BUDGET,
+                );
+                let summary =
+                    tokio::time::timeout_at(summary_deadline, upstream_error_summary(response))
+                        .await
+                        .unwrap_or_else(|_| status.to_string());
+                let error = format!("{}: {summary}", ready.name);
+                if let Some(log) = &attempt_log {
+                    pending_retry = Some((log.clone(), error.clone()));
+                }
+                let _ = state.db.set_error_async(&ready.id, &error).await;
+                if let Some(scope) = policy.cooldown_scope {
+                    state.apply_cooldown(&ready.id, &capability, scope, cooldown);
+                }
+                state.unbind_route(route_key, &ready.id);
+                last_error = error;
+                break;
+            }
+
+            if !status.is_success() {
+                if let Some(log) = &attempt_log {
+                    log.mark_response(status.as_u16());
+                    log.finish("error", Some(&status.to_string()));
+                }
+                return hold_capacity_lease(passthrough_client_response(response), capacity_lease);
+            }
+
+            if let Some(log) = &attempt_log {
+                log.mark_response(status.as_u16());
+            }
+
+            let (response, usage, completion_deferred) = match tokio::time::timeout_at(
+                startup_deadline,
+                to_client_response(
+                    response,
+                    ready.account_type == "oauth",
+                    requested_stream,
+                    Some(StreamObserverContext {
+                        state: Arc::clone(&state),
+                        account_id: ready.id.clone(),
+                        capability: capability.clone(),
+                        route_key,
+                        model_hint: model_hint.clone(),
+                        request_log: attempt_log.clone(),
+                    }),
+                ),
+            )
+            .await
+            {
+                Ok(Ok(prepared)) => prepared,
+                Ok(Err(error)) => {
+                    let scope = error.cooldown_scope();
+                    let error = format!("{}: {error}", ready.name);
+                    if let Some(log) = &attempt_log {
+                        pending_retry = Some((log.clone(), error.clone()));
+                    }
+                    let _ = state.db.set_error_async(&ready.id, &error).await;
+                    state.apply_cooldown(&ready.id, &capability, scope, Duration::from_secs(20));
+                    state.unbind_route(route_key, &ready.id);
+                    last_error = error;
+                    break;
+                }
+                Err(_) => {
+                    let error = format!("{}: upstream startup budget exhausted", ready.name);
+                    if let Some(log) = &attempt_log {
+                        log.finish("error", Some(&error));
+                    }
+                    let _ = state.db.set_error_async(&ready.id, &error).await;
+                    state.cool_down_account(&ready.id, Duration::from_secs(20));
+                    state.unbind_route(route_key, &ready.id);
+                    last_error = error;
+                    break 'accounts;
+                }
+            };
+
+            state.clear_cooldown(&ready.id, &capability);
+            state.bind_route(route_key, &ready.id);
+            let _ = state.db.mark_used_async(&ready.id).await;
+            if let Some(usage) = usage {
+                let estimate = estimate_cost(&usage, model_hint.as_deref());
+                if let Some(log) = &attempt_log {
+                    log.record_usage(RequestLogUsage::from_breakdown(
+                        &usage,
+                        estimate.total_cost,
+                        estimate.unpriced_tokens,
+                    ));
+                }
+                if let Err(error) = state.db.record_usage_async(
+                    &ready.id,
+                    &usage,
+                    estimate.total_cost,
+                    estimate.unpriced_tokens,
+                ).await {
+                    warn!(account_id = %ready.id, %error, "记录 Token 用量失败");
+                }
+            }
+            if !completion_deferred {
+                if let Some(log) = &attempt_log {
+                    log.finish("success", None);
+                }
+            }
+            return hold_capacity_lease(response, capacity_lease);
+        }
+    }
+
+    if let Some((log, message)) = pending_retry.take() {
+        log.finish("error", Some(&message));
+    }
+    if attempted_accounts == 0 {
+        request_log.record_local_failure(StatusCode::SERVICE_UNAVAILABLE, &last_error);
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &last_error,
+            "capacity_exhausted",
+        );
+    }
+    json_error(StatusCode::BAD_GATEWAY, &last_error, "upstream_error")
+}
+
+fn request_body_limit_message(limit: usize) -> String {
+    const MEBIBYTE: usize = 1024 * 1024;
+    if limit >= MEBIBYTE && limit % MEBIBYTE == 0 {
+        format!(
+            "request body exceeds the configured {} MB limit",
+            limit / MEBIBYTE
+        )
+    } else {
+        format!("request body exceeds the configured {limit} byte limit")
+    }
+}
+
+fn request_body_limit_response(limit: usize) -> Response {
+    json_error(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        &request_body_limit_message(limit),
+        "invalid_request_error",
+    )
+}
+
+pub(super) fn hold_capacity_lease(response: Response, lease: CapacityLease) -> Response {
+    let (parts, body) = response.into_parts();
+    let stream = futures::stream::unfold(
+        (body.into_data_stream(), lease),
+        |(mut body, lease)| async move { body.next().await.map(|chunk| (chunk, (body, lease))) },
+    );
+    Response::from_parts(parts, Body::from_stream(stream))
+}
+
+pub(super) fn cooling_down_response(retry_after: Option<u64>) -> Response {
+    let mut response = json_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "all active accounts are temporarily cooling down",
+        "upstream_error",
+    );
+    if let Some(seconds) = retry_after.filter(|seconds| *seconds > 0) {
+        if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+    }
+    response
+}
+
+pub(super) fn request_route_key(headers: &HeaderMap, body: &[u8]) -> Option<u64> {
+    for header in [
+        "x-session-id",
+        "session-id",
+        "session_id",
+        "x-conversation-id",
+        "conversation-id",
+        "conversation_id",
+        "x-prompt-cache-key",
+        "prompt-cache-key",
+    ] {
+        if let Some(value) = headers
+            .get(header)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(stable_route_hash(value));
+        }
+    }
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    for field in ["session_id", "conversation_id", "prompt_cache_key"] {
+        if let Some(value) = value
+            .get(field)
+            .or_else(|| {
+                value
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get(field))
+            })
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(stable_route_hash(value));
+        }
+    }
+    None
+}
+
+pub(super) fn stable_route_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+pub(super) fn account_supports_request(account: &Account, capability: &RequestCapability) -> bool {
+    let endpoint_supported = account.account_type != "oauth"
+        || matches!(
+            capability.endpoint,
+            EndpointFamily::Responses | EndpointFamily::Models
+        );
+    endpoint_supported
+        && capability
+            .model
+            .as_deref()
+            .map(|model| model_is_allowed(&account.models, model))
+            .unwrap_or(true)
+}
+
+pub(super) fn model_is_allowed(configured_models: &[String], requested_model: &str) -> bool {
+    if configured_models.is_empty() {
+        return true;
+    }
+    configured_models
+        .iter()
+        .any(|pattern| wildcard_model_matches(pattern, requested_model))
+}
+
+pub(super) fn wildcard_model_matches(pattern: &str, model: &str) -> bool {
+    let pattern = pattern.to_ascii_lowercase();
+    let model = model.to_ascii_lowercase();
+    let pattern = pattern.as_bytes();
+    let model = model.as_bytes();
+    let (mut pattern_index, mut model_index) = (0, 0);
+    let (mut star_index, mut star_match) = (None, 0);
+
+    while model_index < model.len() {
+        if pattern_index < pattern.len() && pattern[pattern_index] == model[model_index] {
+            pattern_index += 1;
+            model_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            star_match = model_index;
+        } else if let Some(star) = star_index {
+            pattern_index = star + 1;
+            star_match += 1;
+            model_index = star_match;
+        } else {
+            return false;
+        }
+    }
+    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+        pattern_index += 1;
+    }
+    pattern_index == pattern.len()
+}
+
+pub(super) fn classify_failure(status: StatusCode, has_model: bool) -> FailurePolicy {
+    let capability_scope = if has_model {
+        CooldownScope::Capability
+    } else {
+        CooldownScope::Account
+    };
+    match status.as_u16() {
+        401..=403 => FailurePolicy {
+            switch_account: true,
+            cooldown_scope: Some(CooldownScope::Account),
+        },
+        404 if has_model => FailurePolicy {
+            switch_account: true,
+            cooldown_scope: Some(CooldownScope::Capability),
+        },
+        408 | 429 => FailurePolicy {
+            switch_account: true,
+            cooldown_scope: Some(capability_scope),
+        },
+        _ if status.is_server_error() => FailurePolicy {
+            switch_account: true,
+            cooldown_scope: Some(capability_scope),
+        },
+        _ => FailurePolicy {
+            switch_account: false,
+            cooldown_scope: None,
+        },
+    }
+}
+
+pub(super) fn parse_retry_after(
+    value: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        return Some(Duration::from_secs(seconds.clamp(1, 3600)));
+    }
+    let retry_at = chrono::DateTime::parse_from_rfc2822(value.trim())
+        .ok()?
+        .with_timezone(&chrono::Utc);
+    let milliseconds = retry_at.signed_duration_since(now).num_milliseconds();
+    if milliseconds <= 0 {
+        return None;
+    }
+    let seconds = ((milliseconds as u64) + 999) / 1000;
+    Some(Duration::from_secs(seconds.clamp(1, 3600)))
+}
+
+pub(super) fn response_cooldown(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> Duration {
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return headers
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| parse_retry_after(value, chrono::Utc::now()))
+            .unwrap_or_else(|| Duration::from_secs(60));
+    }
+    match status.as_u16() {
+        401..=403 => Duration::from_secs(300),
+        404 => Duration::from_secs(10 * 60),
+        408 => Duration::from_secs(20),
+        _ if status.is_server_error() => Duration::from_secs(20),
+        _ => Duration::from_secs(30),
+    }
+}

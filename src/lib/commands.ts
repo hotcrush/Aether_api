@@ -12,11 +12,16 @@ import type {
   ImportResult,
   ProxyInfo,
   RelayUsageSummary,
+  RequestLog,
+  RequestLogPage,
+  RequestLogQuery,
 } from '../types'
 
 const previewMode = import.meta.env.DEV
   && typeof window !== 'undefined'
   && new URLSearchParams(window.location.search).has('preview')
+
+const PREVIEW_CACHE_PREFIX = 'aether:preview-cache:'
 
 let previewAccounts: Account[] = [
   {
@@ -116,6 +121,185 @@ let previewAccounts: Account[] = [
 let previewAccessToken = 'sk-local-cf4456e6195e4461957af12029f7cdfb'
 let previewCodexTakeoverActive = false
 let previewCodexHistoryBackupAvailable = false
+
+const previewLogTimestamp = (offsetMs: number) => new Date(Date.now() - offsetMs).toISOString()
+
+let previewRequestLogs: RequestLog[] = [
+  {
+    id: 8,
+    request_id: 'req-preview-stream',
+    attempt_index: 1,
+    account_id: 'oauth-pro',
+    account_name: '日常开发',
+    account_type: 'oauth',
+    source: 'proxy',
+    method: 'POST',
+    path: '/v1/responses',
+    endpoint_family: 'responses',
+    model: 'gpt-5.6-sol',
+    status: 'pending',
+    http_status: 200,
+    streaming: true,
+    ttfb_ms: 426,
+    duration_ms: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: 0,
+    unpriced_tokens: 0,
+    estimated_cost: 0,
+    message: '',
+    created_at: previewLogTimestamp(8_000),
+    completed_at: null,
+  },
+  {
+    id: 7,
+    request_id: 'req-preview-retry',
+    attempt_index: 2,
+    account_id: 'api-key',
+    account_name: '团队中转站',
+    account_type: 'api_key',
+    source: 'proxy',
+    method: 'POST',
+    path: '/v1/responses',
+    endpoint_family: 'responses',
+    model: 'gpt-5.5',
+    status: 'success',
+    http_status: 200,
+    streaming: true,
+    ttfb_ms: 612,
+    duration_ms: 4_286,
+    input_tokens: 18_420,
+    output_tokens: 2_816,
+    cached_tokens: 12_160,
+    cache_write_tokens: 0,
+    reasoning_tokens: 1_304,
+    total_tokens: 21_236,
+    unpriced_tokens: 0,
+    estimated_cost: 0.034216,
+    message: '',
+    created_at: previewLogTimestamp(48_000),
+    completed_at: previewLogTimestamp(43_714),
+  },
+  {
+    id: 6,
+    request_id: 'req-preview-retry',
+    attempt_index: 1,
+    account_id: 'oauth-team',
+    account_name: '团队备用',
+    account_type: 'oauth',
+    source: 'proxy',
+    method: 'POST',
+    path: '/v1/responses',
+    endpoint_family: 'responses',
+    model: 'gpt-5.5',
+    status: 'retry',
+    http_status: 429,
+    streaming: true,
+    ttfb_ms: 238,
+    duration_ms: 241,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: 0,
+    unpriced_tokens: 0,
+    estimated_cost: 0,
+    message: '上游限流，已切换下一个可用账号',
+    created_at: previewLogTimestamp(49_000),
+    completed_at: previewLogTimestamp(48_759),
+  },
+  {
+    id: 5,
+    request_id: 'req-preview-models',
+    attempt_index: 1,
+    account_id: 'oauth-pro',
+    account_name: '日常开发',
+    account_type: 'oauth',
+    source: 'proxy',
+    method: 'GET',
+    path: '/v1/models',
+    endpoint_family: 'models',
+    model: '',
+    status: 'success',
+    http_status: 200,
+    streaming: false,
+    ttfb_ms: 184,
+    duration_ms: 186,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: 0,
+    unpriced_tokens: 0,
+    estimated_cost: 0,
+    message: '',
+    created_at: previewLogTimestamp(132_000),
+    completed_at: previewLogTimestamp(131_814),
+  },
+  {
+    id: 4,
+    request_id: 'req-preview-error',
+    attempt_index: 1,
+    account_id: null,
+    account_name: '',
+    account_type: '',
+    source: 'proxy',
+    method: 'POST',
+    path: '/v1/responses',
+    endpoint_family: 'responses',
+    model: 'gpt-5.6-terra',
+    status: 'error',
+    http_status: 503,
+    streaming: false,
+    ttfb_ms: null,
+    duration_ms: 38,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: 0,
+    unpriced_tokens: 0,
+    estimated_cost: 0,
+    message: '没有可用且匹配该模型的上游',
+    created_at: previewLogTimestamp(196_000),
+    completed_at: previewLogTimestamp(195_962),
+  },
+  {
+    id: 3,
+    request_id: 'req-preview-cancelled',
+    attempt_index: 1,
+    account_id: 'oauth-pro',
+    account_name: '日常开发',
+    account_type: 'oauth',
+    source: 'proxy',
+    method: 'POST',
+    path: '/v1/responses',
+    endpoint_family: 'responses',
+    model: 'gpt-5.4',
+    status: 'cancelled',
+    http_status: 200,
+    streaming: true,
+    ttfb_ms: 391,
+    duration_ms: 1_842,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: 0,
+    unpriced_tokens: 0,
+    estimated_cost: 0,
+    message: '客户端在流式响应完成前断开',
+    created_at: previewLogTimestamp(310_000),
+    completed_at: previewLogTimestamp(308_158),
+  },
+]
 
 const wait = (duration: number) => new Promise((resolve) => window.setTimeout(resolve, duration))
 
@@ -351,6 +535,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         restored_state_rows: 19,
         skipped_reason: null,
       } as T
+    case 'get_cache':
+      return window.localStorage.getItem(
+        `${PREVIEW_CACHE_PREFIX}${String(args?.key ?? '')}`,
+      ) as T
+    case 'set_cache':
+      window.localStorage.setItem(
+        `${PREVIEW_CACHE_PREFIX}${String(args?.key ?? '')}`,
+        String(args?.value ?? ''),
+      )
+      return undefined as T
     case 'query_account_quota':
       if (args?.id === 'oauth-disabled') throw new Error('OAuth token 已失效，请刷新后重试')
       return previewQuota(String(args?.id)) as T
@@ -360,6 +554,34 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         .map((account) => ({ account_id: account.id, quota: previewQuota(account.id) })) as T
     case 'query_relay_usage':
       return previewRelayUsage() as T
+    case 'list_request_logs': {
+      const query = (args?.query ?? {}) as RequestLogQuery
+      const normalizedSearch = query.search?.trim().toLocaleLowerCase() ?? ''
+      const limit = Math.min(500, Math.max(1, Math.trunc(query.limit ?? 100)))
+      const filtered = previewRequestLogs
+        .filter((item) => !query.status || item.status === query.status)
+        .filter((item) => !query.account_id || item.account_id === query.account_id)
+        .filter((item) => !query.source || item.source === query.source)
+        .filter((item) => !query.before_id || item.id < query.before_id)
+        .filter((item) => {
+          if (!normalizedSearch) return true
+          return [item.request_id, item.account_name, item.model, item.path, item.message]
+            .some((value) => value.toLocaleLowerCase().includes(normalizedSearch))
+        })
+        .sort((left, right) => right.id - left.id)
+      const items = filtered.slice(0, limit)
+      const hasMore = filtered.length > items.length
+      return {
+        items: items.map((item) => ({ ...item })),
+        has_more: hasMore,
+        next_before_id: hasMore ? items.at(-1)?.id ?? null : null,
+      } as T
+    }
+    case 'clear_request_logs': {
+      const deleted = previewRequestLogs.length
+      previewRequestLogs = []
+      return deleted as T
+    }
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }
@@ -447,6 +669,11 @@ export const queryAllQuotas = () =>
 
 export const queryRelayUsage = (id: string) =>
   call<RelayUsageSummary>('query_relay_usage', { id })
+
+export const listRequestLogs = (query: RequestLogQuery = {}) =>
+  call<RequestLogPage>('list_request_logs', { query })
+
+export const clearRequestLogs = () => call<number>('clear_request_logs')
 
 export const getCache = (key: string) =>
   call<string | null>('get_cache', { key })

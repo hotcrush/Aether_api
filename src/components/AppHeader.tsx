@@ -58,7 +58,7 @@ export function AppHeader({ proxy, onSecretAction }: { proxy: ProxyInfo | null; 
           <button
             className="win-btn"
             onClick={() => getCurrentWindow().minimize()}
-            title="最小化"
+            data-tooltip="最小化"
             aria-label="最小化"
           >
             <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor" /></svg>
@@ -66,7 +66,7 @@ export function AppHeader({ proxy, onSecretAction }: { proxy: ProxyInfo | null; 
           <button
             className="win-btn"
             onClick={() => getCurrentWindow().toggleMaximize()}
-            title={maximized ? '还原' : '最大化'}
+            data-tooltip={maximized ? '还原' : '最大化'}
             aria-label={maximized ? '还原' : '最大化'}
           >
             {maximized ? (
@@ -83,7 +83,7 @@ export function AppHeader({ proxy, onSecretAction }: { proxy: ProxyInfo | null; 
           <button
             className="win-btn win-btn-close"
             onClick={() => getCurrentWindow().close()}
-            title="关闭"
+            data-tooltip="关闭"
             aria-label="关闭"
           >
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2">

@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { Activity, Server, Terminal } from 'lucide-react'
+import { Activity, ScrollText, Server, Terminal } from 'lucide-react'
 import { AccountTable } from './components/AccountTable'
 import { AccountToolbar } from './components/AccountToolbar'
 import { ApiKeyDialog } from './components/ApiKeyDialog'
 import { AppHeader } from './components/AppHeader'
 import { ClipboardImportDialog } from './components/ClipboardImportDialog'
 import { CodexSettingsPanel } from './components/CodexSettingsPanel'
+import { ChannelMonitorPanel } from './components/ChannelMonitorPanel'
 import { DeleteAccountDialog } from './components/DeleteAccountDialog'
 import { ImportDialog } from './components/ImportDialog'
+import { LoggerPage } from './components/LoggerPage'
 import { PageImportDropZone } from './components/PageImportDropZone'
 import { ProxyPanel } from './components/ProxyPanel'
 import { ResetAccessKeyDialog } from './components/ResetAccessKeyDialog'
 import { ToastStack } from './components/ToastStack'
+import { TooltipProvider } from './components/TooltipProvider'
 import { TrashDialog } from './components/TrashDialog'
 import {
   deleteAccount as deleteAccountCommand,
@@ -40,13 +43,27 @@ import {
   setAccountConcurrency,
   testAccount,
 } from './lib/commands'
+import { getChannelMonitorSnapshot, probeChannel } from './lib/channelMonitor'
 import { errorText } from './lib/format'
-import { loadQuotaCache, saveQuotaToCache, removeQuotaFromCache } from './lib/quotaCache'
+import {
+  loadQuotaCache,
+  removeQuotaFromCache,
+  saveQuotaBatchToCache,
+  saveQuotaToCache,
+} from './lib/quotaCache'
 import {
   loadRelayUsageCache,
   removeRelayUsageFromCache,
+  saveRelayUsageFailureToCache,
   saveRelayUsageToCache,
 } from './lib/relayUsageCache'
+import {
+  DEFAULT_QUOTA_REFRESH_SETTINGS,
+  loadQuotaRefreshSettings,
+  QUOTA_REFRESH_INTERVALS,
+  saveQuotaRefreshSettings,
+  type QuotaRefreshInterval,
+} from './lib/quotaRefreshSettings'
 import type {
   Account,
   AccountQuotaResult,
@@ -60,6 +77,15 @@ import type {
   RelayUsageQueryState,
   ToastItem,
 } from './types'
+import type { ChannelMonitorSnapshot } from './monitorTypes'
+
+const USAGE_QUERY_CONCURRENCY = 3
+
+function advanceRequestEpoch(epochs: Map<string, number>, accountId: string) {
+  const next = (epochs.get(accountId) ?? 0) + 1
+  epochs.set(accountId, next)
+  return next
+}
 
 export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([])
@@ -78,15 +104,33 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   const [resetKeyOpen, setResetKeyOpen] = useState(false)
   const [trashOpen, setTrashOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'upstreams' | 'codex' | 'monitor'>('upstreams')
+  const [activeTab, setActiveTab] = useState<'upstreams' | 'codex' | 'monitor' | 'logs'>('upstreams')
   const [busyActions, setBusyActions] = useState<Set<string>>(() => new Set())
   const [quotaStates, setQuotaStates] = useState<Record<string, QuotaQueryState>>({})
   const [relayUsageStates, setRelayUsageStates] = useState<Record<string, RelayUsageQueryState>>({})
+  const [relayCacheHydrated, setRelayCacheHydrated] = useState(false)
+  const [quotaAutoRefreshEnabled, setQuotaAutoRefreshEnabled] = useState(
+    DEFAULT_QUOTA_REFRESH_SETTINGS.enabled,
+  )
+  const [quotaAutoRefreshInterval, setQuotaAutoRefreshInterval] = useState<QuotaRefreshInterval>(
+    DEFAULT_QUOTA_REFRESH_SETTINGS.intervalMinutes,
+  )
+  const [quotaRefreshSettingsHydrated, setQuotaRefreshSettingsHydrated] = useState(false)
+  const [monitorSnapshot, setMonitorSnapshot] = useState<ChannelMonitorSnapshot | null>(null)
+  const [monitorLoading, setMonitorLoading] = useState(true)
+  const [monitorRefreshing, setMonitorRefreshing] = useState(false)
+  const [monitorError, setMonitorError] = useState('')
+  const [probeBusy, setProbeBusy] = useState<Set<string>>(() => new Set())
   const [toasts, setToasts] = useState<ToastItem[]>([])
   const toastId = useRef(0)
   const relayAutoVersions = useRef(new Map<string, string>())
+  const relayFreshCacheIds = useRef(new Set<string>())
+  const quotaRequestEpochs = useRef(new Map<string, number>())
+  const relayRequestEpochs = useRef(new Map<string, number>())
+  const quotaQueryInFlight = useRef(false)
   const clipboardScanBusy = useRef(false)
   const dialogOpenRef = useRef(false)
+  const monitorLoadInFlight = useRef(false)
 
   const notify = useCallback((message: string, error = false) => {
     const id = ++toastId.current
@@ -110,6 +154,23 @@ export default function App() {
   const loadCodexSessionHistory = useCallback(async () => {
     const status = await getCodexSessionHistoryStatus()
     setCodexSessionHistory(status)
+  }, [])
+
+  const loadChannelMonitor = useCallback(async (initial = false) => {
+    if (monitorLoadInFlight.current) return
+    monitorLoadInFlight.current = true
+    if (initial) setMonitorLoading(true)
+    else setMonitorRefreshing(true)
+    try {
+      setMonitorSnapshot(await getChannelMonitorSnapshot())
+      setMonitorError('')
+    } catch (error) {
+      setMonitorError(errorText(error))
+    } finally {
+      monitorLoadInFlight.current = false
+      setMonitorLoading(false)
+      setMonitorRefreshing(false)
+    }
   }, [])
 
   const loadAccounts = useCallback(async () => {
@@ -148,15 +209,62 @@ export default function App() {
     retryLoad()
   }, [retryLoad])
 
-  // Restore usage caches from DB on mount
+  // Restore last-known values before deciding which relay accounts need a refresh.
   useEffect(() => {
-    loadQuotaCache().then((cached) => {
-      if (Object.keys(cached).length) setQuotaStates(cached)
-    })
-    loadRelayUsageCache().then((cached) => {
-      if (Object.keys(cached).length) setRelayUsageStates(cached)
-    })
+    let disposed = false
+
+    void loadQuotaCache()
+      .then(({ states }) => {
+        if (disposed) return
+        const untouchedStates = Object.fromEntries(
+          Object.entries(states).filter(([id]) => !quotaRequestEpochs.current.has(id)),
+        )
+        if (Object.keys(untouchedStates).length) {
+          setQuotaStates((current) => ({ ...untouchedStates, ...current }))
+        }
+      })
+      .catch(() => undefined)
+
+    void loadRelayUsageCache()
+      .then(({ states, staleAccountIds }) => {
+        if (disposed) return
+        const staleIds = new Set(staleAccountIds)
+        const untouchedStates = Object.fromEntries(
+          Object.entries(states).filter(([id]) => !relayRequestEpochs.current.has(id)),
+        )
+        for (const id of Object.keys(untouchedStates)) {
+          if (!staleIds.has(id)) relayFreshCacheIds.current.add(id)
+        }
+        if (Object.keys(untouchedStates).length) {
+          setRelayUsageStates((current) => ({ ...untouchedStates, ...current }))
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!disposed) setRelayCacheHydrated(true)
+      })
+
+    return () => { disposed = true }
   }, [])
+
+  useEffect(() => {
+    let disposed = false
+    void loadQuotaRefreshSettings().then((settings) => {
+      if (disposed) return
+      setQuotaAutoRefreshEnabled(settings.enabled)
+      setQuotaAutoRefreshInterval(settings.intervalMinutes)
+      setQuotaRefreshSettingsHydrated(true)
+    })
+    return () => { disposed = true }
+  }, [])
+
+  useEffect(() => {
+    if (!quotaRefreshSettingsHydrated) return
+    void saveQuotaRefreshSettings({
+      enabled: quotaAutoRefreshEnabled,
+      intervalMinutes: quotaAutoRefreshInterval,
+    })
+  }, [quotaAutoRefreshEnabled, quotaAutoRefreshInterval, quotaRefreshSettingsHydrated])
 
   useEffect(() => {
     dialogOpenRef.current = Boolean(
@@ -230,6 +338,20 @@ export default function App() {
     }
   }, [loadProxy])
 
+  useEffect(() => {
+    if (activeTab !== 'monitor') return
+    const refreshMonitor = () => {
+      if (document.visibilityState === 'visible') void loadChannelMonitor(false)
+    }
+    void loadChannelMonitor(true)
+    const timer = window.setInterval(refreshMonitor, 10_000)
+    document.addEventListener('visibilitychange', refreshMonitor)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshMonitor)
+    }
+  }, [activeTab, loadChannelMonitor])
+
   const visibleAccounts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     return accounts.filter((account) => {
@@ -265,6 +387,22 @@ export default function App() {
       notify('复制失败', true)
     }
   }
+
+  const runChannelProbe = useCallback(async (accountId: string) => {
+    setProbeBusy((current) => new Set(current).add(accountId))
+    try {
+      notify(await probeChannel(accountId))
+    } catch (error) {
+      notify(errorText(error), true)
+    } finally {
+      await loadChannelMonitor(false)
+      setProbeBusy((current) => {
+        const next = new Set(current)
+        next.delete(accountId)
+        return next
+      })
+    }
+  }, [loadChannelMonitor, notify])
 
   const openImport = useCallback((files: File[] = []) => {
     setImportFiles(files)
@@ -357,8 +495,13 @@ export default function App() {
         delete next[deleteTarget.id]
         return next
       })
-      removeQuotaFromCache(deleteTarget.id)
-      removeRelayUsageFromCache(deleteTarget.id)
+      advanceRequestEpoch(quotaRequestEpochs.current, deleteTarget.id)
+      advanceRequestEpoch(relayRequestEpochs.current, deleteTarget.id)
+      relayFreshCacheIds.current.delete(deleteTarget.id)
+      await Promise.all([
+        removeQuotaFromCache(deleteTarget.id),
+        removeRelayUsageFromCache(deleteTarget.id),
+      ])
       relayAutoVersions.current.delete(deleteTarget.id)
       setDeleteTarget(null)
       notify('上游已删除')
@@ -367,20 +510,6 @@ export default function App() {
       notify(errorText(error), true)
     } finally {
       setActionBusy(actionKey, false)
-    }
-  }
-
-  const reloadAccounts = async () => {
-    setActionBusy('reload', true)
-    try {
-      await refreshData()
-      notify('列表已刷新')
-    } catch (error) {
-      const message = errorText(error)
-      setLoadError(message)
-      notify(message, true)
-    } finally {
-      setActionBusy('reload', false)
     }
   }
 
@@ -433,18 +562,21 @@ export default function App() {
   }
 
   const queryQuota = async (account: Account) => {
+    const requestEpoch = advanceRequestEpoch(quotaRequestEpochs.current, account.id)
     setQuotaStates((current) => ({
       ...current,
       [account.id]: { status: 'loading' },
     }))
     try {
       const quota = await queryAccountQuota(account.id)
+      if (quotaRequestEpochs.current.get(account.id) !== requestEpoch) return
       setQuotaStates((current) => ({
         ...current,
         [account.id]: { status: 'success', quota },
       }))
-      saveQuotaToCache(account.id, quota)
+      await saveQuotaToCache(account.id, quota)
     } catch (error) {
+      if (quotaRequestEpochs.current.get(account.id) !== requestEpoch) return
       setQuotaStates((current) => ({
         ...current,
         [account.id]: { status: 'error', error: errorText(error) },
@@ -452,40 +584,65 @@ export default function App() {
     }
   }
 
-  const queryRelayUsage = useCallback(async (account: Account) => {
-    setRelayUsageStates((current) => ({
-      ...current,
-      [account.id]: { status: 'loading' },
-    }))
+  const queryRelayUsage = useCallback(async (account: Account, background = false) => {
+    const requestEpoch = advanceRequestEpoch(relayRequestEpochs.current, account.id)
+    setRelayUsageStates((current) => {
+      if (background && current[account.id]?.status === 'success') return current
+      return {
+        ...current,
+        [account.id]: { status: 'loading' },
+      }
+    })
     try {
       const usage = await queryRelayUsageCommand(account.id)
+      if (relayRequestEpochs.current.get(account.id) !== requestEpoch) return false
       setRelayUsageStates((current) => ({
         ...current,
         [account.id]: { status: 'success', usage },
       }))
-      saveRelayUsageToCache(account.id, usage)
+      await saveRelayUsageToCache(account.id, usage)
+      if (relayRequestEpochs.current.get(account.id) !== requestEpoch) return false
+      relayFreshCacheIds.current.add(account.id)
       return true
     } catch (error) {
-      setRelayUsageStates((current) => ({
-        ...current,
-        [account.id]: { status: 'error', error: errorText(error) },
-      }))
+      if (relayRequestEpochs.current.get(account.id) !== requestEpoch) return false
+      const message = errorText(error)
+      setRelayUsageStates((current) => {
+        if (background && current[account.id]?.status === 'success') return current
+        return {
+          ...current,
+          [account.id]: { status: 'error', error: message },
+        }
+      })
+      await saveRelayUsageFailureToCache(account.id, message)
+      if (relayRequestEpochs.current.get(account.id) === requestEpoch) {
+        relayFreshCacheIds.current.add(account.id)
+      }
       return false
     }
   }, [])
 
   useEffect(() => {
-    accounts
+    if (!relayCacheHydrated) return
+    const pendingAccounts = accounts
       .filter((account) => account.account_type === 'api_key' && account.status === 'active')
-      .forEach((account) => {
+      .filter((account) => {
         const version = account.updated_at || account.created_at
-        if (relayAutoVersions.current.get(account.id) === version) return
+        const previousVersion = relayAutoVersions.current.get(account.id)
+        if (previousVersion === version) return false
         relayAutoVersions.current.set(account.id, version)
-        void queryRelayUsage(account)
+        if (previousVersion !== undefined) return true
+        return !relayRequestEpochs.current.has(account.id)
+          && !relayFreshCacheIds.current.has(account.id)
       })
-  }, [accounts, queryRelayUsage])
+    void runAsyncPool(
+      pendingAccounts,
+      USAGE_QUERY_CONCURRENCY,
+      (account) => queryRelayUsage(account, true),
+    )
+  }, [accounts, queryRelayUsage, relayCacheHydrated])
 
-  const queryEveryQuota = async () => {
+  const queryEveryQuota = useCallback(async (automatic = false) => {
     const oauthAccounts = accounts.filter(
       (account) => account.account_type === 'oauth' && account.status === 'active',
     )
@@ -493,11 +650,19 @@ export default function App() {
       (account) => account.account_type === 'api_key' && account.status === 'active',
     )
     if (!oauthAccounts.length && !relayAccounts.length) {
-      notify('暂无启用的上游')
+      if (!automatic) notify('暂无启用的上游')
       return
     }
+    if (quotaQueryInFlight.current) return
 
+    quotaQueryInFlight.current = true
     setActionBusy('quota-all', true)
+    const quotaEpochs = new Map(
+      oauthAccounts.map((account) => [
+        account.id,
+        advanceRequestEpoch(quotaRequestEpochs.current, account.id),
+      ]),
+    )
     setQuotaStates((current) => {
       const next = { ...current }
       oauthAccounts.forEach((account) => { next[account.id] = { status: 'loading' } })
@@ -509,29 +674,40 @@ export default function App() {
       if (oauthAccounts.length) {
         try {
           const results = await queryAllQuotas()
-          setQuotaStates((current) => {
-            const next = { ...current }
-            oauthAccounts.forEach((account) => {
-              const result = findQuotaResult(results, account)
-              if (result?.quota) {
-                next[account.id] = { status: 'success', quota: result.quota }
-                saveQuotaToCache(account.id, result.quota)
-              } else {
-                next[account.id] = { status: 'error', error: result?.error || '未返回额度结果' }
-              }
-            })
-            return next
-          })
-          failed += oauthAccounts.filter((account) => {
+          const nextStates: Record<string, QuotaQueryState> = {}
+          const cacheUpdates: {
+            accountId: string
+            quota: NonNullable<AccountQuotaResult['quota']>
+          }[] = []
+
+          oauthAccounts.forEach((account) => {
+            if (quotaRequestEpochs.current.get(account.id) !== quotaEpochs.get(account.id)) return
             const result = findQuotaResult(results, account)
-            return result?.error || !result?.quota
-          }).length
+            if (result?.quota) {
+              nextStates[account.id] = { status: 'success', quota: result.quota }
+              cacheUpdates.push({ accountId: account.id, quota: result.quota })
+            } else {
+              nextStates[account.id] = {
+                status: 'error',
+                error: result?.error || '未返回额度结果',
+              }
+              failed++
+            }
+          })
+
+          if (Object.keys(nextStates).length) {
+            setQuotaStates((current) => ({ ...current, ...nextStates }))
+          }
+          await saveQuotaBatchToCache(cacheUpdates)
         } catch (error) {
           const message = errorText(error)
-          failed += oauthAccounts.length
+          const currentAccounts = oauthAccounts.filter(
+            (account) => quotaRequestEpochs.current.get(account.id) === quotaEpochs.get(account.id),
+          )
+          failed += currentAccounts.length
           setQuotaStates((current) => {
             const next = { ...current }
-            oauthAccounts.forEach((account) => {
+            currentAccounts.forEach((account) => {
               next[account.id] = { status: 'error', error: message }
             })
             return next
@@ -539,13 +715,44 @@ export default function App() {
         }
       }
 
-      const relayResults = await Promise.all(relayAccounts.map(queryRelayUsage))
+      const relayResults = await runAsyncPool(
+        relayAccounts,
+        USAGE_QUERY_CONCURRENCY,
+        (account) => queryRelayUsage(account),
+      )
       failed += relayResults.filter((success) => !success).length
-      notify(failed ? `用量查询完成，${failed} 个失败` : '全部用量已更新', failed > 0)
+      if (!automatic || failed) {
+        notify(
+          automatic
+            ? `自动刷新完成，${failed} 个失败`
+            : failed ? `用量查询完成，${failed} 个失败` : '全部用量已更新',
+          failed > 0,
+        )
+      }
+    } catch (error) {
+      notify(
+        automatic ? `自动刷新失败：${errorText(error)}` : errorText(error),
+        true,
+      )
     } finally {
+      quotaQueryInFlight.current = false
       setActionBusy('quota-all', false)
     }
-  }
+  }, [accounts, notify, queryRelayUsage, setActionBusy])
+
+  useEffect(() => {
+    if (!quotaRefreshSettingsHydrated || !quotaAutoRefreshEnabled) return
+    const timer = window.setInterval(
+      () => { void queryEveryQuota(true) },
+      quotaAutoRefreshInterval * 60_000,
+    )
+    return () => window.clearInterval(timer)
+  }, [
+    queryEveryQuota,
+    quotaAutoRefreshEnabled,
+    quotaAutoRefreshInterval,
+    quotaRefreshSettingsHydrated,
+  ])
 
   const exportBackup = async () => {
     try {
@@ -580,13 +787,18 @@ export default function App() {
             delete next[account.id]
             return next
           })
-          removeQuotaFromCache(account.id)
           setRelayUsageStates((current) => {
             const next = { ...current }
             delete next[account.id]
             return next
           })
-          removeRelayUsageFromCache(account.id)
+          advanceRequestEpoch(quotaRequestEpochs.current, account.id)
+          advanceRequestEpoch(relayRequestEpochs.current, account.id)
+          relayFreshCacheIds.current.delete(account.id)
+          await Promise.all([
+            removeQuotaFromCache(account.id),
+            removeRelayUsageFromCache(account.id),
+          ])
           relayAutoVersions.current.delete(account.id)
         }
       }
@@ -682,6 +894,7 @@ export default function App() {
 
   return (
     <>
+      <TooltipProvider />
       <AppHeader proxy={proxy} onSecretAction={() => setTrashOpen(true)} />
       <nav className="tab-bar">
         <button
@@ -705,6 +918,13 @@ export default function App() {
           <Activity size={14} />
           渠道监控
         </button>
+        <button
+          className={`tab-item${activeTab === 'logs' ? ' active' : ''}`}
+          onClick={() => setActiveTab('logs')}
+        >
+          <ScrollText size={14} />
+          请求日志
+        </button>
       </nav>
       {activeTab === 'upstreams' ? (
       <main>
@@ -712,11 +932,11 @@ export default function App() {
           proxy={proxy}
           activeAccountCount={activeAccountCount}
           accountCount={accounts.length}
+          accounts={accounts}
+          quotaStates={quotaStates}
+          relayUsageStates={relayUsageStates}
           resetBusy={busyActions.has('reset-counts')}
-          resetTokenBusy={busyActions.has('reset-access-token')}
-          onCopy={copyText}
           onResetCounts={resetCounts}
-          onResetAccessToken={() => setResetKeyOpen(true)}
         />
         <PageImportDropZone onFiles={openImport} />
 
@@ -724,18 +944,23 @@ export default function App() {
           query={query}
           statusFilter={statusFilter}
           typeFilter={typeFilter}
-          reloadBusy={busyActions.has('reload')}
           refreshAllBusy={busyActions.has('refresh-all')}
           queryAllBusy={busyActions.has('quota-all')}
+          autoRefreshEnabled={quotaAutoRefreshEnabled}
+          autoRefreshIntervalMinutes={quotaAutoRefreshInterval}
           removeErrorsBusy={busyActions.has('remove-errors')}
           errorCount={errorAccounts.length}
           onQueryChange={setQuery}
           onStatusFilterChange={setStatusFilter}
           onTypeFilterChange={setTypeFilter}
-          onReload={reloadAccounts}
           onImport={openImport}
           onRefreshAll={refreshAll}
-          onQueryAll={queryEveryQuota}
+          onQueryAll={() => { void queryEveryQuota(false) }}
+          onAutoRefreshEnabledChange={setQuotaAutoRefreshEnabled}
+          onAutoRefreshIntervalChange={(minutes) => {
+            const interval = QUOTA_REFRESH_INTERVALS.find((value) => value === minutes)
+            if (interval !== undefined) setQuotaAutoRefreshInterval(interval)
+          }}
           onExport={exportBackup}
           onAddRelay={() => setRelayOpen(true)}
           onRemoveErrors={removeErrorAccounts}
@@ -777,13 +1002,19 @@ export default function App() {
         onRestoreHistory={restoreCodexSessionHistoryAction}
         onResetAccessToken={() => setResetKeyOpen(true)}
       />
+      ) : activeTab === 'logs' ? (
+      <LoggerPage />
       ) : (
       <main className="monitor-page">
-        <div className="monitor-placeholder">
-          <Activity size={32} />
-          <h3>渠道监控</h3>
-          <p>请求链路、延迟分布、异常告警 — 即将接入</p>
-        </div>
+        <ChannelMonitorPanel
+          snapshot={monitorSnapshot}
+          loading={monitorLoading}
+          refreshing={monitorRefreshing}
+          error={monitorError}
+          probeBusy={probeBusy}
+          onRefresh={() => { void loadChannelMonitor(false) }}
+          onProbe={(accountId) => { void runChannelProbe(accountId) }}
+        />
       </main>
       )}
 
@@ -827,6 +1058,27 @@ export default function App() {
       <ToastStack items={toasts} />
     </>
   )
+}
+
+async function runAsyncPool<T, R>(
+  items: T[],
+  concurrency: number,
+  task: (item: T, index: number) => Promise<R>,
+) {
+  const results = new Array<R>(items.length)
+  const workerCount = Math.min(items.length, Math.max(1, Math.trunc(concurrency)))
+  let nextIndex = 0
+
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      results[index] = await task(items[index], index)
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, worker))
+  return results
 }
 
 function findQuotaResult(results: AccountQuotaResult[], account: Account) {

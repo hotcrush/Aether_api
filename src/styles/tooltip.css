@@ -1,0 +1,54 @@
+/* ── Shared Tooltip ── */
+
+.app-tooltip {
+  position: fixed;
+  z-index: 1200;
+  max-width: min(360px, calc(100vw - 20px));
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: #1d2935;
+  box-shadow: 0 8px 24px rgba(16, 25, 34, 0.22);
+  color: #f5f7f9;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  pointer-events: none;
+  white-space: pre-line;
+  transform: translateY(2px) scale(0.98);
+  transform-origin: center bottom;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.app-tooltip.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.app-tooltip.bottom {
+  transform-origin: center top;
+}
+
+.app-tooltip::after {
+  position: absolute;
+  left: var(--tooltip-arrow-left);
+  width: 7px;
+  height: 7px;
+  background: #1d2935;
+  content: '';
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.app-tooltip.top::after {
+  bottom: -4px;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.app-tooltip.bottom::after {
+  top: -4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}

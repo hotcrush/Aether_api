@@ -48,7 +48,7 @@ export function Dialog({
             className="icon-btn"
             onClick={onClose}
             disabled={preventClose}
-            title="关闭"
+            data-tooltip="关闭"
             aria-label="关闭"
           >
             <X size={17} />

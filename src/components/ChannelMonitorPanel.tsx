@@ -252,7 +252,7 @@ function ChannelCard({
         <div className="monitor-channel-title">
           <span className={`monitor-state-dot ${status ?? 'unknown'}`} />
           <div>
-            <h3 title={item.name}>{item.name || '未命名上游'}</h3>
+            <h3 data-tooltip={item.name}>{item.name || '未命名上游'}</h3>
             <div className="monitor-channel-meta">
               <span>{item.account_type === 'oauth' ? 'OAuth' : '中转站'}</span>
               <span>·</span>
@@ -264,7 +264,7 @@ function ChannelCard({
           className="monitor-probe"
           onClick={onProbe}
           disabled={item.account_status === 'disabled' || probing}
-          title={item.account_status === 'disabled' ? '渠道已停用' : '执行一次轻量连接检测'}
+          data-tooltip={item.account_status === 'disabled' ? '渠道已停用' : '执行一次轻量连接检测'}
         >
           <RefreshCw className={probing ? 'spin' : undefined} size={13} />
           检测
@@ -295,14 +295,14 @@ function ChannelCard({
           {latest?.source === 'probe' && <span className="monitor-source">手动检测</span>}
         </div>
         {latest && (
-          <span className="monitor-route" title={[latest.endpoint_family, latest.model].filter(Boolean).join(' · ')}>
+          <span className="monitor-route" data-tooltip={[latest.endpoint_family, latest.model].filter(Boolean).join(' · ')}>
             {[latest.endpoint_family, latest.model].filter(Boolean).join(' · ') || '上游请求'}
           </span>
         )}
       </div>
 
       {latest?.message && (
-        <div className="monitor-message" title={latest.message}>
+        <div className="monitor-message" data-tooltip={latest.message}>
           <AlertCircle size={12} />{latest.message}
         </div>
       )}
@@ -343,10 +343,10 @@ function Timeline({ events }: { events: ChannelMonitorEvent[] }) {
         {points.length ? points.map((event) => (
           <span
             className={event.status}
-            title={`${statusLabel(event.status)} · ${formatLatency(event.ttfb_ms)} · ${formatTime(event.created_at)}`}
+            data-tooltip={`${statusLabel(event.status)} · ${formatLatency(event.ttfb_ms)} · ${formatTime(event.created_at)}`}
             key={event.id}
           />
-        )) : <span className="unknown wide" title="暂无数据" />}
+        )) : <span className="unknown wide" data-tooltip="暂无数据" />}
       </div>
     </div>
   )

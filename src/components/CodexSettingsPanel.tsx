@@ -106,7 +106,7 @@ export function CodexSettingsPanel({
             className={`btn ${restorable ? '' : 'btn-primary'}`}
             onClick={onToggleTakeover}
             disabled={!proxy || busy}
-            title={actionTitle}
+            data-tooltip={actionTitle}
           >
             {restorable ? <RotateCcw className={busy ? 'spin' : undefined} size={16} /> : <Power size={16} />}
             {actionLabel}
@@ -126,7 +126,7 @@ export function CodexSettingsPanel({
                 className="icon-btn"
                 onClick={() => onCopy(baseUrl)}
                 disabled={!baseUrl}
-                title="复制 Base URL"
+                data-tooltip="复制 Base URL"
                 aria-label="复制 Base URL"
               >
                 <Copy size={15} />
@@ -141,7 +141,7 @@ export function CodexSettingsPanel({
                 className="icon-btn"
                 onClick={() => setKeyVisible((visible) => !visible)}
                 disabled={!proxy}
-                title={keyVisible ? '隐藏 API Key' : '显示 API Key'}
+                data-tooltip={keyVisible ? '隐藏 API Key' : '显示 API Key'}
                 aria-label={keyVisible ? '隐藏 API Key' : '显示 API Key'}
               >
                 {keyVisible ? <EyeOff size={15} /> : <Eye size={15} />}
@@ -150,7 +150,7 @@ export function CodexSettingsPanel({
                 className="icon-btn"
                 onClick={() => proxy && onCopy(proxy.access_token)}
                 disabled={!proxy}
-                title="复制 API Key"
+                data-tooltip="复制 API Key"
                 aria-label="复制 API Key"
               >
                 <Copy size={15} />
@@ -159,7 +159,7 @@ export function CodexSettingsPanel({
                 className="icon-btn key-reset"
                 onClick={onResetAccessToken}
                 disabled={!proxy || resetTokenBusy}
-                title="重置 API Key"
+                data-tooltip="重置 API Key"
                 aria-label="重置 API Key"
               >
                 <RotateCcw className={resetTokenBusy ? 'spin' : undefined} size={15} />
@@ -178,7 +178,7 @@ export function CodexSettingsPanel({
                   className="icon-btn"
                   onClick={() => onCopy(value)}
                   disabled={!value || value === '加载中' || value === '未指向 Aether'}
-                  title={`复制${label}`}
+                  data-tooltip={`复制${label}`}
                   aria-label={`复制${label}`}
                 >
                   {label.endsWith('文件') ? <FileText size={15} /> : <Copy size={15} />}
@@ -210,7 +210,7 @@ export function CodexSettingsPanel({
               className="btn"
               onClick={onMigrateHistory}
               disabled={migrateDisabled}
-              title="迁移 openai/aether 既有会话"
+              data-tooltip="迁移 openai/aether 既有会话"
             >
               <Database className={migrateHistoryBusy ? 'spin' : undefined} size={16} />
               迁移既有会话
@@ -219,7 +219,7 @@ export function CodexSettingsPanel({
               className="btn"
               onClick={onRestoreHistory}
               disabled={restoreDisabled}
-              title="按备份账本恢复官方会话"
+              data-tooltip="按备份账本恢复官方会话"
             >
               <RotateCcw className={restoreHistoryBusy ? 'spin' : undefined} size={16} />
               恢复官方会话
@@ -241,7 +241,7 @@ export function CodexSettingsPanel({
                     className="icon-btn"
                     onClick={() => onCopy(value)}
                     disabled={!canCopy}
-                    title={`复制${label}`}
+                    data-tooltip={`复制${label}`}
                     aria-label={`复制${label}`}
                   >
                     {label === 'Provider 桶' ? <Copy size={15} /> : <FileText size={15} />}

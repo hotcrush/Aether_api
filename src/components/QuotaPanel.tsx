@@ -25,7 +25,7 @@ export function QuotaPanel({
 
   if (state?.status === 'error') {
     return (
-      <div className="quota-cell quota-cell-error" title={state.error}>
+      <div className="quota-cell quota-cell-error" data-tooltip={state.error}>
         <div className="quota-error-copy">
           <AlertCircle size={13} />
           <span>{friendlyQuotaError(state.error)}</span>
@@ -62,7 +62,7 @@ export function QuotaPanel({
         <button
           className="quota-refresh"
           onClick={onQuery}
-          title={`刷新用量，上次查询 ${formatLocalTime(state.quota.fetched_at)}`}
+          data-tooltip={`刷新用量，上次查询 ${formatLocalTime(state.quota.fetched_at)}`}
           aria-label="刷新用量"
         >
           <RefreshCw size={12} />
@@ -122,7 +122,7 @@ function UsageWindow({
           {used !== null && <span style={{ width: `${used}%` }} />}
         </div>
         <strong>{used === null ? '--' : formatPercent(used)}</strong>
-        <span className="usage-window-reset" title={exactReset ? `重置于 ${exactReset}` : undefined}>
+        <span className="usage-window-reset" data-tooltip={exactReset ? `重置于 ${exactReset}` : undefined}>
           {reset || '未知'}
         </span>
       </div>

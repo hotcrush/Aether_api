@@ -1,6 +1,5 @@
 import { Activity, AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, KeyRound, RefreshCw, Trash2 } from 'lucide-react'
-import { useCallback, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useState } from 'react'
 import { formatExpiry } from '../lib/format'
 import type { Account, QuotaQueryState, RelayUsageQueryState } from '../types'
 import { CapacityEditor } from './CapacityEditor'
@@ -243,32 +242,17 @@ function AccountRow({
   const priorityBusy = busyActions.has(`priority:${account.id}`)
   const capacityBusy = busyActions.has(`concurrency:${account.id}`)
   const hasRelayBaseUrl = Boolean(account.base_url?.trim())
-  const errorRef = useRef<HTMLDivElement>(null)
-  const [tipPos, setTipPos] = useState<{ top: number; left: number } | null>(null)
-
-  const showTip = useCallback(() => {
-    const el = errorRef.current
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    setTipPos({ top: rect.top - 6, left: rect.left })
-  }, [])
-
-  const hideTip = useCallback(() => setTipPos(null), [])
-
   const tipContent = account.last_error ? (getErrorTip(account.last_error) || account.last_error) : null
   const parsedErr = account.last_error ? parseError(account.last_error) : null
 
   return (
-    <>
     <tr>
       <td className="col-account">
-        <div className="account-name" title={account.name}>{account.name || '未命名'}</div>
+        <div className="account-name" data-tooltip={account.name || undefined}>{account.name || '未命名'}</div>
         {parsedErr ? (
           <div
-            ref={errorRef}
             className="account-detail account-error error-tip-wrap error-structured"
-            onMouseEnter={showTip}
-            onMouseLeave={hideTip}
+            data-tooltip={tipContent ?? undefined}
           >
             <div className="error-badges">
               <span className={`error-label error-label-${parsedErr.code === '429' ? 'rate' : parsedErr.code.startsWith('5') ? 'server' : parsedErr.code ? 'auth' : 'generic'}`}>{parsedErr.label}</span>
@@ -277,7 +261,7 @@ function AccountRow({
             {parsedErr.resetsAt && <span className="error-countdown">{formatCountdown(parsedErr.resetsAt)}</span>}
           </div>
         ) : (
-          <div className="account-detail" title={detail}>{detail}</div>
+          <div className="account-detail" data-tooltip={detail}>{detail}</div>
         )}
       </td>
       <td className="col-type">
@@ -335,7 +319,7 @@ function AccountRow({
           aria-checked={account.status === 'active'}
           aria-busy={toggleBusy}
           aria-label={`${account.name || '未命名'}启用状态`}
-          title={account.status === 'active' ? '点击停用' : '点击启用'}
+          data-tooltip={account.status === 'active' ? '点击停用' : '点击启用'}
         >
           <span className="status-switch-track" aria-hidden="true">
             <span className="status-switch-thumb" />
@@ -351,7 +335,7 @@ function AccountRow({
             className="icon-btn"
             onClick={() => onTest(account)}
             disabled={testBusy}
-            title="测试连接"
+            data-tooltip="测试连接"
             aria-label="测试连接"
           >
             {testBusy ? <RefreshCw className="spin" size={16} /> : <Activity size={16} />}
@@ -361,7 +345,7 @@ function AccountRow({
               className="icon-btn"
               onClick={() => onRefresh(account)}
               disabled={!account.refreshable || refreshBusy}
-              title="刷新 OAuth"
+              data-tooltip="刷新 OAuth"
               aria-label="刷新 OAuth"
             >
               <RefreshCw className={refreshBusy ? 'spin' : undefined} size={16} />
@@ -372,7 +356,7 @@ function AccountRow({
               className="icon-btn"
               onClick={() => onOpenRelay(account)}
               disabled={!hasRelayBaseUrl || openRelayBusy}
-              title={hasRelayBaseUrl ? '打开中转站网页' : '未配置 Base URL'}
+              data-tooltip={hasRelayBaseUrl ? '打开中转站网页' : '未配置 Base URL'}
               aria-label={hasRelayBaseUrl ? '打开中转站网页' : '未配置 Base URL'}
               aria-busy={openRelayBusy}
             >
@@ -384,7 +368,7 @@ function AccountRow({
           <button
             className="icon-btn"
             onClick={() => onDelete(account)}
-            title="删除上游"
+            data-tooltip="删除上游"
             aria-label="删除上游"
           >
             <Trash2 size={16} />
@@ -392,15 +376,5 @@ function AccountRow({
         </div>
       </td>
     </tr>
-    {tipPos && tipContent && createPortal(
-      <div
-        className="error-tip-fixed"
-        style={{ top: tipPos.top, left: tipPos.left, transform: 'translateY(-100%)' }}
-      >
-        {tipContent}
-      </div>,
-      document.body,
-    )}
-    </>
   )
 }

@@ -12,11 +12,14 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import type { AccountStatus, AccountTypeFilter } from '../types'
 
+const AUTO_REFRESH_INTERVALS = [5, 15, 30, 60] as const
+
 interface AccountToolbarProps {
   query: string
   statusFilter: 'all' | AccountStatus
   typeFilter: AccountTypeFilter
-  reloadBusy: boolean
+  autoRefreshEnabled: boolean
+  autoRefreshIntervalMinutes: number
   refreshAllBusy: boolean
   queryAllBusy: boolean
   removeErrorsBusy: boolean
@@ -24,7 +27,8 @@ interface AccountToolbarProps {
   onQueryChange: (value: string) => void
   onStatusFilterChange: (value: 'all' | AccountStatus) => void
   onTypeFilterChange: (value: AccountTypeFilter) => void
-  onReload: () => void
+  onAutoRefreshEnabledChange: (enabled: boolean) => void
+  onAutoRefreshIntervalChange: (minutes: number) => void
   onImport: () => void
   onRefreshAll: () => void
   onQueryAll: () => void
@@ -37,7 +41,8 @@ export function AccountToolbar({
   query,
   statusFilter,
   typeFilter,
-  reloadBusy,
+  autoRefreshEnabled,
+  autoRefreshIntervalMinutes,
   refreshAllBusy,
   queryAllBusy,
   removeErrorsBusy,
@@ -45,7 +50,8 @@ export function AccountToolbar({
   onQueryChange,
   onStatusFilterChange,
   onTypeFilterChange,
-  onReload,
+  onAutoRefreshEnabledChange,
+  onAutoRefreshIntervalChange,
   onImport,
   onRefreshAll,
   onQueryAll,
@@ -53,16 +59,53 @@ export function AccountToolbar({
   onAddRelay,
   onRemoveErrors,
 }: AccountToolbarProps) {
+  const [usageMenuOpen, setUsageMenuOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
+  const usageMenuRef = useRef<HTMLDivElement>(null)
+  const usageMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const autoRefreshToggleRef = useRef<HTMLButtonElement>(null)
   const moreRef = useRef<HTMLDivElement>(null)
+  const moreButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    const closeMenu = (event: MouseEvent) => {
+    const closeMenus = (event: MouseEvent) => {
+      if (!usageMenuRef.current?.contains(event.target as Node)) setUsageMenuOpen(false)
       if (!moreRef.current?.contains(event.target as Node)) setMoreOpen(false)
     }
-    document.addEventListener('mousedown', closeMenu)
-    return () => document.removeEventListener('mousedown', closeMenu)
-  }, [])
+
+    const closeMenusOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+
+      if (usageMenuOpen) {
+        setUsageMenuOpen(false)
+        usageMenuButtonRef.current?.focus()
+      } else if (moreOpen) {
+        setMoreOpen(false)
+        moreButtonRef.current?.focus()
+      }
+    }
+
+    document.addEventListener('mousedown', closeMenus)
+    document.addEventListener('keydown', closeMenusOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeMenus)
+      document.removeEventListener('keydown', closeMenusOnEscape)
+    }
+  }, [moreOpen, usageMenuOpen])
+
+  useEffect(() => {
+    if (usageMenuOpen) autoRefreshToggleRef.current?.focus()
+  }, [usageMenuOpen])
+
+  const toggleUsageMenu = () => {
+    setMoreOpen(false)
+    setUsageMenuOpen((current) => !current)
+  }
+
+  const toggleMoreMenu = () => {
+    setUsageMenuOpen(false)
+    setMoreOpen((current) => !current)
+  }
 
   const runMenuAction = (action: () => void) => {
     setMoreOpen(false)
@@ -112,15 +155,80 @@ export function AccountToolbar({
         </div>
       </div>
       <div className="toolbar-spacer" />
-      <button className="btn" onClick={onReload} disabled={reloadBusy} title="刷新列表">
-        <RefreshCw className={reloadBusy ? 'spin' : undefined} size={16} />刷新
-      </button>
+      <div className="menu-wrap usage-query-split" ref={usageMenuRef}>
+        <button
+          type="button"
+          className="btn usage-query-main"
+          onClick={onQueryAll}
+          disabled={queryAllBusy}
+          data-tooltip="查询全部用量"
+        >
+          <Gauge size={16} />查询全部用量
+        </button>
+        <button
+          ref={usageMenuButtonRef}
+          type="button"
+          className={`btn usage-query-toggle${autoRefreshEnabled ? ' active' : ''}`}
+          onClick={toggleUsageMenu}
+          aria-label="用量自动刷新设置"
+          aria-haspopup="dialog"
+          aria-expanded={usageMenuOpen}
+          aria-controls="usage-auto-refresh-menu"
+          data-tooltip="自动刷新设置"
+        >
+          <ChevronDown size={14} />
+        </button>
+        {usageMenuOpen && (
+          <div
+            id="usage-auto-refresh-menu"
+            className="dropdown usage-query-dropdown"
+            role="dialog"
+            aria-label="用量自动刷新设置"
+          >
+            <button
+              ref={autoRefreshToggleRef}
+              type="button"
+              className="auto-refresh-toggle"
+              role="switch"
+              aria-checked={autoRefreshEnabled}
+              onClick={() => onAutoRefreshEnabledChange(!autoRefreshEnabled)}
+            >
+              <span className="auto-refresh-copy">
+                <strong>自动刷新</strong>
+                <small>
+                  {autoRefreshEnabled ? `每 ${autoRefreshIntervalMinutes} 分钟` : '已关闭'}
+                </small>
+              </span>
+              <span className="auto-refresh-switch" aria-hidden="true">
+                <span />
+              </span>
+            </button>
+            <div className="menu-separator" />
+            <label className="auto-refresh-interval" htmlFor="usage-auto-refresh-interval">
+              <span>刷新周期</span>
+              <select
+                id="usage-auto-refresh-interval"
+                value={autoRefreshIntervalMinutes}
+                onChange={(event) => onAutoRefreshIntervalChange(Number(event.target.value))}
+              >
+                {AUTO_REFRESH_INTERVALS.map((minutes) => (
+                  <option key={minutes} value={minutes}>
+                    {minutes} 分钟
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+      </div>
       <div className="menu-wrap" ref={moreRef}>
         <button
+          ref={moreButtonRef}
           className="btn"
-          onClick={() => setMoreOpen((current) => !current)}
+          onClick={toggleMoreMenu}
+          aria-haspopup="menu"
           aria-expanded={moreOpen}
-          title="更多操作"
+          data-tooltip="更多操作"
           aria-label="更多操作"
         >
           <MoreHorizontal size={16} />更多操作<ChevronDown size={14} />
@@ -137,13 +245,6 @@ export function AccountToolbar({
             >
               <RefreshCw size={16} />刷新全部 OAuth
             </button>
-            <button
-              className="menu-item"
-              onClick={() => runMenuAction(onQueryAll)}
-              disabled={queryAllBusy}
-            >
-              <Gauge size={16} />查询全部用量
-            </button>
             <div className="menu-separator" />
             <button className="menu-item" onClick={() => runMenuAction(onExport)}>
               <Download size={16} />导出备份
@@ -158,7 +259,7 @@ export function AccountToolbar({
           </div>
         )}
       </div>
-      <button className="btn btn-primary" onClick={onAddRelay} title="添加中转站">
+      <button className="btn btn-primary" onClick={onAddRelay} data-tooltip="添加中转站">
         <Plus size={16} />添加中转站
       </button>
     </div>

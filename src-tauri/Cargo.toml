@@ -19,7 +19,10 @@ base64 = "0.22"
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["macros"] }
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "gzip", "brotli", "deflate", "zstd"], default-features = false }
-rusqlite = { version = "0.31", features = ["bundled", "backup"] }
+rusqlite = { version = "0.37", features = ["bundled", "backup"] }
+tokio-rusqlite = "0.7"
+arc-swap = "1"
+single-instance = "0.3"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tower-http = { version = "0.6", features = ["cors"] }
@@ -30,3 +33,6 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 tauri-plugin-clipboard-manager = "2"
 toml_edit = "0.22"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
