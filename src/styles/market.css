@@ -225,7 +225,7 @@
 .market-product-toolbar {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-end;
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 10px;
@@ -1818,6 +1818,17 @@
   height: 15px;
   flex: 0 0 15px;
   accent-color: var(--primary);
+}
+
+.market-shop-hint {
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+  line-height: 1.4;
+}
+
+.market-shop-hint b {
+  color: var(--text-secondary);
+  font-weight: 600;
 }
 
 .market-delete-copy {

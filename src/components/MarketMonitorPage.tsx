@@ -1311,6 +1311,7 @@ function ShopEditorDialog({
           <label>
             <span>店铺 token</span>
             <input value={editor.input.token} onChange={(event) => update('token', event.target.value)} placeholder="例如 echo_dream" disabled={Boolean(editor.originalToken)} />
+            <small className="market-shop-hint">即店铺链接最后一段，如 liandx.com/shop/<b>echo_dream</b></small>
           </label>
           <label className="market-shop-enabled">
             <input type="checkbox" checked={editor.input.enabled} onChange={(event) => update('enabled', event.target.checked)} />
