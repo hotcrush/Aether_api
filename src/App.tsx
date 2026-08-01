@@ -13,6 +13,7 @@ import { DailyBudgetDialog } from './components/DailyBudgetDialog'
 import { ImportDialog } from './components/ImportDialog'
 import { LoggerPage } from './components/LoggerPage'
 import { MarketMonitorPage, type MarketSection } from './components/MarketMonitorPage'
+import { SettingsPage } from './components/SettingsPage'
 import { PageImportDropZone } from './components/PageImportDropZone'
 import { ProxyPanel } from './components/ProxyPanel'
 import { ResetAccessKeyDialog } from './components/ResetAccessKeyDialog'
@@ -1195,7 +1196,7 @@ export default function App() {
   return (
     <>
       <TooltipProvider />
-      <AppHeader proxy={proxy} onSecretAction={() => setTrashOpen(true)} />
+      <AppHeader proxy={proxy} notify={notify} onSecretAction={() => setTrashOpen(true)} />
       <WorkspaceTabBar
         tabs={tabState.tabs}
         activeTabId={tabState.activeTabId}
@@ -1320,6 +1321,8 @@ export default function App() {
           setTabState((current) => openWebWorkspaceTab(current, input))
         }}
       />
+      ) : activeTab === 'settings' ? (
+      <SettingsPage onOpenTrash={() => setTrashOpen(true)} />
       ) : (
       <main className="monitor-page">
         <ChannelMonitorPanel

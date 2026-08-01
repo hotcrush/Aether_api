@@ -7,12 +7,11 @@ pub fn show_market_notification(app: &AppHandle, event: &MarketEvent) -> Result<
     notification
         .summary(&event.title)
         .body(&event.body)
+        .auto_icon()
         .action("open", "打开 Aether");
 
     #[cfg(windows)]
-    if is_installed_app() {
-        notification.app_id(&app.config().identifier);
-    }
+    notification.app_id(&app.config().identifier);
 
     let handle = notification.show().map_err(|error| error.to_string())?;
     let app = app.clone();
@@ -34,19 +33,4 @@ pub fn show_market_notification(app: &AppHandle, event: &MarketEvent) -> Result<
         });
     });
     Ok(())
-}
-
-#[cfg(windows)]
-fn is_installed_app() -> bool {
-    let Some(parent) = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
-    else {
-        return false;
-    };
-    let path = parent
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    !path.ends_with("\\target\\debug") && !path.ends_with("\\target\\release")
 }

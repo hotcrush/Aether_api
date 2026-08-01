@@ -13,6 +13,13 @@
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-set-focus",
-    "updater:default"
+    "updater:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
+    {
+      "identifier": "shell:allow-open",
+      "allow": [{ "url": "mailto:*" }]
+    }
   ]
 }

@@ -13,18 +13,23 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Manager, WindowEvent};
 
 pub(crate) fn run() {
-    let _guard =
-        single_instance::SingleInstance::new("aether-sub2api-single").expect("无法创建单实例锁");
-    if !_guard.is_single() {
-        eprintln!("Aether 已在运行中");
-        std::process::exit(0);
-    }
-
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 第二次启动（双击桌面图标）时唤起已隐藏的窗口
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(crate::webview_tabs::audit_plugin())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())

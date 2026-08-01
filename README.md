@@ -9,6 +9,7 @@ Aether 聚焦“个人本机上游管理”，不是公网中转站、计费平�
 ## 目录
 
 - [产品定位](#产品定位)
+- [界面预览](#界面预览)
 - [借鉴与致谢](#借鉴与致谢)
 - [实现了什么](#实现了什么)
 - [当前完成情况](#当前完成情况)
@@ -32,6 +33,38 @@ flowchart LR
 
 客户端只需保存 Aether 显示的本地 Base URL 和 API Key。账号刷新、模型匹配、负载分配、故障切换和上游维护都在桌面应用中完成。
 
+## 界面预览
+
+### 上游管理
+
+主页面。顶部代理面板显示本地 Base URL、API Key、代理状态和全局统计；下方为账号池与中转站列表，支持搜索、筛选、优先级编辑、启停和批量操作。
+
+![上游管理](docs/screenshots/upstreams.png)
+
+### 渠道监控
+
+展示每个渠道的可用率、平均首包延迟、失败次数和最近观测时间线，支持手动连接检测。
+
+![渠道监控](docs/screenshots/monitor.png)
+
+### 市场监控
+
+内置店铺与商品监控，提供价格趋势、库存变化、告警通知和店铺健康状态分析。
+
+![市场监控](docs/screenshots/market.png)
+
+### 请求日志
+
+结构化记录每次上游请求的渠道、路由、状态、耗时、Token 和估算费用，支持按状态和渠道筛选。
+
+![请求日志](docs/screenshots/logs.png)
+
+### Codex 配置
+
+一键接管/恢复 Codex Provider，管理会话统一与历史迁移。
+
+![Codex 配置](docs/screenshots/codex.png)
+
 ## 借鉴与致谢
 
 Aether 在开发过程中研究了多个主流 AI 网关和账号池项目。当前实现为 Rust + Tauri 的独立本地应用，不是对下列项目的二进制封装，也不宣称兼容它们的全部功能。
@@ -40,6 +73,7 @@ Aether 在开发过程中研究了多个主流 AI 网关和账号池项目。当
 | --- | --- | --- |
 | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) | 本地兼容 API、OAuth 多账号池、轮询调度、失败切换和 CLI 工具接入的产品思路 | MIT |
 | [Sub2API](https://github.com/Wei-Shaw/sub2api) | 账号池与中转站统一管理、优先级/权重/模型路由、备份数据格式和用量展示思路 | LGPL-3.0-or-later |
+| [CC Switch](https://github.com/farion1231/cc-switch) | Tauri 2 桌面端架构、本地代理热切换与熔断、Provider 一键切换交互、系统托盘快切和自动更新实践 | MIT |
 | [New API](https://github.com/QuantumNous/new-api) | 多上游管理、模型路由、健康状态与运维交互的行业实践 | AGPL-3.0 |
 | [LiteLLM](https://github.com/BerriAI/litellm) | 统一 OpenAI 接口、Provider 抽象、路由与可观测性思路 | MIT，企业目录另有许可 |
 | [GPTSession2CPAandSub2API](https://github.com/gtxx3600/GPTSession2CPAandSub2API) | CPA Codex 账号字段的兼容解析参考 | MIT |

@@ -7,6 +7,7 @@ import {
   Plus,
   ScrollText,
   Server,
+  Settings,
   Store,
   Terminal,
   X,
@@ -40,6 +41,7 @@ const PAGE_META: Record<InternalPageId, { label: string; icon: TabIcon }> = {
   monitor: { label: '渠道监控', icon: Activity },
   market: { label: '市场监控', icon: Store },
   logs: { label: '请求日志', icon: ScrollText },
+  settings: { label: '设置', icon: Settings },
 }
 
 interface DropTarget {

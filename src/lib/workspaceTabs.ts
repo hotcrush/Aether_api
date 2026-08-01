@@ -4,6 +4,7 @@ export const INTERNAL_PAGE_IDS = [
   'monitor',
   'market',
   'logs',
+  'settings',
 ] as const
 
 export type InternalPageId = (typeof INTERNAL_PAGE_IDS)[number]

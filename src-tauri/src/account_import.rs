@@ -5,6 +5,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 const MAX_IMPORT_BYTES: usize = 10 * 1024 * 1024;
+const MAX_EMBEDDED_JSON_VALUES: usize = 4_096;
+const MAX_EMBEDDED_JSON_SCAN_ATTEMPTS: usize = 16_384;
+const MAX_FAILED_JSON_SCAN_WORK_MULTIPLIER: usize = 4;
+const MAX_DETECTED_IMPORT_ACCOUNTS: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -86,165 +90,226 @@ pub fn parse_clipboard_import(content: &str) -> Result<ParsedClipboardImport, St
         return Err("剪贴板内容为空".to_string());
     }
 
-    // Fast path: entire content is valid JSON.
-    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-        let source = classify_clipboard_value(&value)?;
-        let (accounts, errors) = parse_import_contents(&[trimmed.to_string()]);
-        if !errors.is_empty() || accounts.is_empty() {
-            let message = errors
-                .first()
-                .map(|error| error.message.clone())
-                .unwrap_or_else(|| "没有找到可导入的账号".to_string());
-            return Err(message);
+    let extracted = extract_json_values(trimmed)?;
+    let mut source = None;
+    let mut account_values = Vec::new();
+    for value in extracted {
+        let Some(detected) = collect_classified_account_values(value, &mut account_values)? else {
+            continue;
+        };
+        if source.is_some_and(|existing| existing != detected) {
+            return Err("自动导入内容同时包含 CPA 和 Sub2API JSON，请分开导入".to_string());
         }
-        return Ok(ParsedClipboardImport { source, accounts });
+        source = Some(detected);
     }
 
-    // Fallback: extract JSON values from mixed/noisy text.
-    let extracted = extract_json_values(trimmed);
-    if extracted.is_empty() {
-        return Err("剪贴板内容不是完整 JSON，也未找到可识别的 JSON 片段".to_string());
-    }
-    let source = classify_extracted_values(&extracted)?;
-    // Flatten and convert extracted values into accounts via the standard pipeline.
-    let mut flat_values = Vec::new();
-    for value in extracted {
-        flatten_value(value, &mut flat_values);
-    }
-    let mut accounts = Vec::new();
-    let mut errors = Vec::new();
-    for (index, value) in flat_values.into_iter().enumerate() {
-        match account_from_value(value) {
-            Ok(account) => accounts.push(account),
-            Err(message) => errors.push(ImportMessage {
-                index: index + 1,
-                name: String::new(),
-                message,
-            }),
-        }
+    let source = source.ok_or_else(|| "没有找到受支持的 CPA 或 Sub2API JSON".to_string())?;
+    let mut accounts = Vec::with_capacity(account_values.len());
+    for value in account_values {
+        accounts.push(account_from_classified_value(value, source)?);
     }
     if accounts.is_empty() {
-        let message = errors
-            .first()
-            .map(|error| error.message.clone())
-            .unwrap_or_else(|| "没有找到可导入的账号".to_string());
-        return Err(message);
+        return Err("没有找到可导入的账号".to_string());
     }
     Ok(ParsedClipboardImport { source, accounts })
 }
 
-fn classify_clipboard_value(value: &Value) -> Result<ClipboardImportSource, String> {
-    if is_cpa_account(value) {
-        return Ok(ClipboardImportSource::Cpa);
+fn account_from_classified_value(
+    mut value: Value,
+    source: ClipboardImportSource,
+) -> Result<NewAccount, String> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "自动识别的账号条目必须是 JSON 对象".to_string())?;
+    let shadow_fields: &[&str] = match source {
+        ClipboardImportSource::Cpa => &[
+            "credentials",
+            "tokens",
+            "token",
+            "api_key",
+            "OPENAI_API_KEY",
+        ],
+        ClipboardImportSource::Sub2api => &[
+            "tokens",
+            "token",
+            "access_token",
+            "refresh_token",
+            "id_token",
+            "client_id",
+            "clientId",
+            "api_key",
+            "OPENAI_API_KEY",
+            "base_url",
+            "baseUrl",
+            "expires_at",
+            "expiresAt",
+            "expired",
+        ],
+    };
+    for field in shadow_fields {
+        object.remove(*field);
     }
-    if let Some(values) = value.as_array() {
-        if !values.is_empty() && values.iter().all(is_cpa_account) {
-            return Ok(ClipboardImportSource::Cpa);
-        }
+
+    let account = account_from_value(value)?;
+    if source == ClipboardImportSource::Cpa && account.account_type != "oauth" {
+        return Err("CPA JSON 账号类型与凭据不一致".to_string());
     }
-    if is_sub2api_account(value) || is_sub2api_backup(value) {
-        return Ok(ClipboardImportSource::Sub2api);
-    }
-    Err("剪贴板内容不是受支持的 CPA 或 Sub2API JSON".to_string())
+    Ok(account)
 }
 
-/// Classify multiple extracted JSON values, ensuring they are all the same source type.
-fn classify_extracted_values(values: &[Value]) -> Result<ClipboardImportSource, String> {
-    let mut source: Option<ClipboardImportSource> = None;
-    for value in values {
-        let detected = if is_cpa_account(value) {
-            ClipboardImportSource::Cpa
-        } else if is_sub2api_account(value) || is_sub2api_backup(value) {
-            ClipboardImportSource::Sub2api
-        } else if let Some(items) = value.as_array() {
-            // Array: classify by its elements.
-            if !items.is_empty() && items.iter().all(is_cpa_account) {
-                ClipboardImportSource::Cpa
-            } else if !items.is_empty() && items.iter().all(|v| is_sub2api_account(v) || is_sub2api_backup(v)) {
-                ClipboardImportSource::Sub2api
-            } else {
-                continue; // unrecognizable array – skip
-            }
-        } else {
-            continue; // unrecognizable object – skip
-        };
-        match source {
-            None => source = Some(detected),
-            Some(existing) if existing != detected => {
-                return Err("剪贴板中混合了 CPA 和 Sub2API 格式，请分开导入".to_string());
-            }
-            _ => {}
-        }
+fn collect_classified_account_values(
+    value: Value,
+    accounts: &mut Vec<Value>,
+) -> Result<Option<ClipboardImportSource>, String> {
+    if is_cpa_account(&value) {
+        push_detected_account(accounts, value)?;
+        return Ok(Some(ClipboardImportSource::Cpa));
     }
-    source.ok_or_else(|| "剪贴板内容不是受支持的 CPA 或 Sub2API JSON".to_string())
+    if is_sub2api_account(&value) {
+        push_detected_account(accounts, value)?;
+        return Ok(Some(ClipboardImportSource::Sub2api));
+    }
+    if is_sub2api_backup(&value) {
+        let backup_accounts = take_sub2api_backup_accounts(value)
+            .ok_or_else(|| "Sub2API 备份缺少 accounts 数组".to_string())?;
+        let detected = collect_classified_account_values(backup_accounts, accounts)?;
+        if detected != Some(ClipboardImportSource::Sub2api) {
+            return Err("Sub2API 备份包含无法识别的账号条目".to_string());
+        }
+        return Ok(detected);
+    }
+    if let Value::Array(values) = value {
+        let mut source = None;
+        let mut contains_unsupported = false;
+        for item in values {
+            match collect_classified_account_values(item, accounts)? {
+                Some(detected) => {
+                    if source.is_some_and(|existing| existing != detected) {
+                        return Err(
+                            "自动导入 JSON 数组同时包含 CPA 和 Sub2API，请分开导入".to_string()
+                        );
+                    }
+                    source = Some(detected);
+                }
+                None => contains_unsupported = true,
+            }
+        }
+        if source.is_some() && contains_unsupported {
+            return Err("自动导入 JSON 数组包含无法识别的账号条目".to_string());
+        }
+        return Ok(source);
+    }
+    if looks_like_supported_account(&value) {
+        return Err("CPA 或 Sub2API JSON 账号字段不完整".to_string());
+    }
+    Ok(None)
 }
 
-/// Scan mixed text and extract all complete top-level JSON values (objects or arrays).
-/// Noise lines (non-JSON text) are silently discarded.
-fn extract_json_values(text: &str) -> Vec<Value> {
+fn push_detected_account(accounts: &mut Vec<Value>, value: Value) -> Result<(), String> {
+    if accounts.len() >= MAX_DETECTED_IMPORT_ACCOUNTS {
+        return Err("自动识别导入的账号数量不能超过 4096 个".to_string());
+    }
+    accounts.push(value);
+    Ok(())
+}
+
+fn take_sub2api_backup_accounts(mut value: Value) -> Option<Value> {
+    let object = value.as_object_mut()?;
+    if let Some(accounts) = object.remove("accounts") {
+        return Some(accounts);
+    }
+    object.get_mut("data")?.as_object_mut()?.remove("accounts")
+}
+
+fn looks_like_supported_account(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    string_field_eq(object.get("type"), "codex")
+        || string_field_eq(object.get("type"), "sub2api-data")
+        || (string_field_eq(object.get("platform"), "openai")
+            && object
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|account_type| {
+                    matches!(
+                        account_type.to_ascii_lowercase().as_str(),
+                        "oauth" | "apikey" | "api_key" | "key"
+                    )
+                }))
+}
+
+fn extract_json_values(text: &str) -> Result<Vec<Value>, String> {
     let mut values = Vec::new();
-    let bytes = text.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    while i < len {
-        let ch = bytes[i];
-        if ch == b'{' || ch == b'[' {
-            // Try to find the matching close bracket.
-            if let Some(end) = find_json_end(bytes, i) {
-                let candidate = &text[i..end];
-                if let Ok(value) = serde_json::from_str::<Value>(candidate) {
-                    values.push(value);
-                    i = end;
+    let mut offset = 0;
+    let mut attempts = 0;
+    let mut failed_scan_work = 0usize;
+    let failed_scan_budget = text
+        .len()
+        .saturating_mul(MAX_FAILED_JSON_SCAN_WORK_MULTIPLIER);
+
+    while offset < text.len() {
+        let Some((relative_start, opening)) = text[offset..]
+            .char_indices()
+            .find(|(_, character)| matches!(character, '{' | '['))
+        else {
+            break;
+        };
+        let start = offset + relative_start;
+        attempts += 1;
+        if attempts > MAX_EMBEDDED_JSON_SCAN_ATTEMPTS {
+            return Err("自动导入内容中的 JSON 候选过多".to_string());
+        }
+
+        let mut stream = serde_json::Deserializer::from_str(&text[start..]).into_iter::<Value>();
+        match stream.next() {
+            Some(Ok(value)) => {
+                let consumed = stream.byte_offset();
+                if consumed == 0 {
+                    offset = start + opening.len_utf8();
                     continue;
                 }
+                values.push(value);
+                if values.len() > MAX_EMBEDDED_JSON_VALUES {
+                    return Err("自动导入内容中的完整 JSON 数量不能超过 4096 个".to_string());
+                }
+                offset = start + consumed;
             }
+            Some(Err(error)) => {
+                failed_scan_work = failed_scan_work
+                    .saturating_add(json_error_scan_distance(&text[start..], &error));
+                if failed_scan_work > failed_scan_budget {
+                    return Err("自动导入内容中的无效 JSON 候选过于复杂".to_string());
+                }
+                offset = start + opening.len_utf8();
+            }
+            None => offset = start + opening.len_utf8(),
         }
-        i += 1;
     }
-    values
+
+    Ok(values)
 }
 
-/// Starting at `start` (which must be `{` or `[`), find the byte offset just past
-/// the matching close bracket, respecting strings and escapes.
-fn find_json_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let open = bytes[start];
-    let close = if open == b'{' { b'}' } else { b']' };
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-    let mut i = start;
-    while i < bytes.len() {
-        let ch = bytes[i];
-        if escape_next {
-            escape_next = false;
-            i += 1;
-            continue;
-        }
-        if in_string {
-            match ch {
-                b'\\' => escape_next = true,
-                b'"' => in_string = false,
-                _ => {}
+fn json_error_scan_distance(candidate: &str, error: &serde_json::Error) -> usize {
+    let target_line = error.line().max(1);
+    let mut current_line = 1;
+    let mut line_start = 0;
+    if target_line > 1 {
+        for (index, byte) in candidate.bytes().enumerate() {
+            if byte != b'\n' {
+                continue;
             }
-        } else {
-            match ch {
-                b'"' => in_string = true,
-                b'{' | b'[' => depth += 1,
-                b'}' | b']' => {
-                    depth -= 1;
-                    if depth == 0 && ch == close {
-                        return Some(i + 1);
-                    }
-                    if depth < 0 {
-                        return None;
-                    }
-                }
-                _ => {}
+            current_line += 1;
+            line_start = index + 1;
+            if current_line == target_line {
+                break;
             }
         }
-        i += 1;
     }
-    None
+    line_start
+        .saturating_add(error.column())
+        .clamp(1, candidate.len())
 }
 
 fn is_cpa_account(value: &Value) -> bool {
@@ -253,6 +318,7 @@ fn is_cpa_account(value: &Value) -> bool {
     };
     string_field_eq(object.get("type"), "codex")
         && !object.contains_key("credentials")
+        && !has_non_empty_string(object.get("api_key"), object.get("OPENAI_API_KEY"))
         && has_non_empty_string(object.get("access_token"), object.get("refresh_token"))
 }
 
@@ -265,15 +331,20 @@ fn is_sub2api_account(value: &Value) -> bool {
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    string_field_eq(object.get("platform"), "openai")
-        && object
-            .get("credentials")
-            .and_then(Value::as_object)
-            .is_some()
-        && matches!(
-            account_type.to_ascii_lowercase().as_str(),
-            "oauth" | "apikey" | "api_key" | "key"
-        )
+    let Some(credentials) = object.get("credentials").and_then(Value::as_object) else {
+        return false;
+    };
+    if !string_field_eq(object.get("platform"), "openai") {
+        return false;
+    }
+    match account_type.to_ascii_lowercase().as_str() {
+        "oauth" => has_non_empty_string(
+            credentials.get("access_token"),
+            credentials.get("refresh_token"),
+        ),
+        "apikey" | "api_key" | "key" => has_non_empty_string(credentials.get("api_key"), None),
+        _ => false,
+    }
 }
 
 fn is_sub2api_backup(value: &Value) -> bool {
@@ -908,6 +979,147 @@ mod tests {
         let parsed = parse_clipboard_import(content).unwrap();
         assert_eq!(parsed.source, ClipboardImportSource::Sub2api);
         assert_eq!(parsed.accounts.len(), 2);
+    }
+
+    #[test]
+    fn clipboard_import_recovers_after_malformed_bracket_noise() {
+        let content = r#"
+            商品说明：[这不是完整 JSON
+            卡密：{"name":"valid","platform":"openai","type":"oauth","credentials":{"refresh_token":"refresh-valid"}}
+        "#;
+        let parsed = parse_clipboard_import(content).unwrap();
+        assert_eq!(parsed.source, ClipboardImportSource::Sub2api);
+        assert_eq!(parsed.accounts.len(), 1);
+        assert_eq!(parsed.accounts[0].refresh_token, "refresh-valid");
+    }
+
+    #[test]
+    fn embedded_json_failed_scan_work_is_bounded() {
+        let content = format!("{}\"unfinished\"", "{\"nested\":".repeat(9));
+        let error = extract_json_values(&content).unwrap_err();
+        assert_eq!(error, "自动导入内容中的无效 JSON 候选过于复杂");
+    }
+
+    #[test]
+    fn embedded_json_non_eof_failed_scan_work_is_bounded() {
+        let content = format!(r#"{}"\uZZZZ""#, "{\"nested\":".repeat(12));
+        let error = extract_json_values(&content).unwrap_err();
+        assert_eq!(error, "自动导入内容中的无效 JSON 候选过于复杂");
+    }
+
+    #[test]
+    fn clipboard_import_accepts_raw_sub2api_array() {
+        let content = r#"[
+            {"name":"a","platform":"openai","type":"oauth","credentials":{"refresh_token":"r1"}},
+            {"name":"b","platform":"openai","type":"api_key","credentials":{"api_key":"sk-test","base_url":"https://example.com/v1"}}
+        ]"#;
+        let parsed = parse_clipboard_import(content).unwrap();
+        assert_eq!(parsed.source, ClipboardImportSource::Sub2api);
+        assert_eq!(parsed.accounts.len(), 2);
+        assert_eq!(parsed.accounts[1].account_type, "api_key");
+    }
+
+    #[test]
+    fn clipboard_import_discards_unrelated_json_without_importing_it() {
+        let content = r#"
+            订单信息：{"order":"A-100","access_token":"must-not-import"}
+            卡密：{"name":"valid","platform":"openai","type":"oauth","credentials":{"refresh_token":"refresh-valid"}}
+        "#;
+        let parsed = parse_clipboard_import(content).unwrap();
+        assert_eq!(parsed.source, ClipboardImportSource::Sub2api);
+        assert_eq!(parsed.accounts.len(), 1);
+        assert_eq!(parsed.accounts[0].refresh_token, "refresh-valid");
+        assert_ne!(parsed.accounts[0].access_token, "must-not-import");
+    }
+
+    #[test]
+    fn clipboard_import_rejects_supported_array_with_unknown_entries() {
+        let content = r#"[
+            {"type":"codex","refresh_token":"r1"},
+            {"note":"not an account"}
+        ]"#;
+        assert!(parse_clipboard_import(content).is_err());
+    }
+
+    #[test]
+    fn clipboard_import_does_not_expand_accounts_on_regular_account_objects() {
+        let content = r#"{
+            "type":"codex",
+            "refresh_token":"outer-refresh",
+            "accounts":[{"access_token":"must-not-import"}],
+            "data":{"accounts":[{"access_token":"also-must-not-import"}]}
+        }"#;
+        let parsed = parse_clipboard_import(content).unwrap();
+        assert_eq!(parsed.source, ClipboardImportSource::Cpa);
+        assert_eq!(parsed.accounts.len(), 1);
+        assert_eq!(parsed.accounts[0].refresh_token, "outer-refresh");
+        assert!(parsed.accounts[0].access_token.is_empty());
+    }
+
+    #[test]
+    fn clipboard_import_requires_sub2api_credentials_in_credentials_object() {
+        let content = r#"{
+            "platform":"openai",
+            "type":"oauth",
+            "refresh_token":"top-level-only",
+            "credentials":{}
+        }"#;
+        assert!(parse_clipboard_import(content).is_err());
+    }
+
+    #[test]
+    fn clipboard_import_rejects_cpa_with_conflicting_api_key() {
+        let content = r#"{
+            "type":"codex",
+            "refresh_token":"oauth-refresh",
+            "api_key":"sk-conflicting"
+        }"#;
+        assert!(parse_clipboard_import(content).is_err());
+    }
+
+    #[test]
+    fn clipboard_import_uses_only_cpa_top_level_credentials() {
+        let content = r#"{
+            "type":"codex",
+            "refresh_token":"checked-refresh",
+            "tokens":{"refresh_token":"nested-noise"},
+            "token":{"access_token":"nested-noise"}
+        }"#;
+        let parsed = parse_clipboard_import(content).unwrap();
+        assert_eq!(parsed.accounts[0].refresh_token, "checked-refresh");
+        assert!(parsed.accounts[0].access_token.is_empty());
+    }
+
+    #[test]
+    fn clipboard_import_uses_only_sub2api_credentials_object() {
+        let content = r#"{
+            "platform":"openai",
+            "type":"oauth",
+            "access_token":"top-level-noise",
+            "id_token":"top-level-noise",
+            "credentials":{"refresh_token":"checked-refresh"}
+        }"#;
+        let parsed = parse_clipboard_import(content).unwrap();
+        assert_eq!(parsed.accounts[0].refresh_token, "checked-refresh");
+        assert!(parsed.accounts[0].access_token.is_empty());
+        assert!(parsed.accounts[0].id_token.is_empty());
+    }
+
+    #[test]
+    fn detected_import_account_count_is_bounded() {
+        let value = Value::Array(
+            (0..=MAX_DETECTED_IMPORT_ACCOUNTS)
+                .map(|index| {
+                    serde_json::json!({
+                        "type": "codex",
+                        "refresh_token": format!("refresh-{index}")
+                    })
+                })
+                .collect(),
+        );
+        let mut accounts = Vec::new();
+        assert!(collect_classified_account_values(value, &mut accounts).is_err());
+        assert_eq!(accounts.len(), MAX_DETECTED_IMPORT_ACCOUNTS);
     }
 
     #[test]

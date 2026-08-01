@@ -23,7 +23,8 @@ reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "gzip"
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 tokio-rusqlite = "0.7"
 arc-swap = "1"
-single-instance = "0.3"
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tower-http = { version = "0.6", features = ["cors"] }

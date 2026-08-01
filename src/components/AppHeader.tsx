@@ -4,7 +4,7 @@ import { getAppVersion } from '../lib/commands'
 import { checkForUpdate, downloadAndInstall, onUpdate, type UpdateStatus } from '../lib/updater'
 import type { AppVersion, ProxyInfo } from '../types'
 
-export function AppHeader({ proxy, onSecretAction }: { proxy: ProxyInfo | null; onSecretAction?: () => void }) {
+export function AppHeader({ proxy, notify, onSecretAction }: { proxy: ProxyInfo | null; notify: (msg: string, error?: boolean) => void; onSecretAction?: () => void }) {
   const serviceLabel = proxy?.running ? '代理运行中' : proxy ? '端口不可用' : '正在启动'
   const [maximized, setMaximized] = useState(false)
   const [appVersion, setAppVersion] = useState<AppVersion | null>(null)
@@ -40,9 +40,14 @@ export function AppHeader({ proxy, onSecretAction }: { proxy: ProxyInfo | null; 
       // 启动后静默检查更新
       setTimeout(() => checkForUpdate(v.version, true), 3000)
     }).catch(() => undefined)
-    const unsub = onUpdate(setUpdateStatus)
+    const unsub = onUpdate((status) => {
+      setUpdateStatus(status)
+      if (status.state === 'up-to-date') notify('已是最新版本')
+      else if (status.state === 'available') notify(`发现新版本 v${status.version}，点击版本号更新`)
+      else if (status.state === 'error') notify(`检查更新失败：${status.message}`, true)
+    })
     return unsub
-  }, [])
+  }, [notify])
 
   const showForcedOverlay = updateStatus.state === 'available' && updateStatus.forced
   const showProgress = updateStatus.state === 'downloading' || updateStatus.state === 'installing'
