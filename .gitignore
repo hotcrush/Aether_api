@@ -5,3 +5,4 @@ src-tauri/target/
 keys/
 *.log
 .DS_Store
+full-page-screenshot.png
