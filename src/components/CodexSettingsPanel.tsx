@@ -49,10 +49,10 @@ export function CodexSettingsPanel({
   const restorable = Boolean(status?.active || status?.backup_available)
   const statusKind = status?.active ? 'active' : status?.backup_available ? 'restore' : 'idle'
   const statusLabel = status?.active ? '已接管' : status?.backup_available ? '可恢复' : '未接管'
-  const actionLabel = restorable ? '恢复 Codex' : '接管 Codex'
+  const actionLabel = restorable ? '恢复配置' : '接管 Codex'
   const actionTitle = restorable
-    ? '恢复接管前的 Codex 配置'
-    : '把 Codex provider 指向 Aether 本地代理'
+    ? '仅恢复接管前的 auth.json 与 config.toml；会话需在下方单独恢复'
+    : '备份 auth.json 与 config.toml，再把 Codex Provider 指向 Aether 本地代理'
   const historyStatusKind = sessionHistory?.active ? 'active' : 'idle'
   const historyStatusLabel = sessionHistory?.active ? '已统一' : '待接管'
   const historyBusy = migrateHistoryBusy || restoreHistoryBusy
@@ -92,13 +92,15 @@ export function CodexSettingsPanel({
               Codex 配置
             </div>
             <div className="codex-subtitle">
-              本地代理接管 Codex Provider
+              配置接管与既有会话迁移分开处理
             </div>
           </div>
           <div className="codex-head-actions">
             <div className="codex-action-meta">
               <ShieldCheck size={15} />
-              {status?.backup_available ? '已保存原始配置快照' : '接管时保存原始配置快照'}
+              {status?.backup_available
+                ? '可恢复接管前的 auth.json 与 config.toml'
+                : '接管前备份 auth.json 与 config.toml'}
             </div>
             <span className={`codex-status ${statusKind}`}>
               {status?.active ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
@@ -195,13 +197,13 @@ export function CodexSettingsPanel({
                 会话统一
               </div>
               <div className="codex-subtitle">
-                新会话统一到 {sessionHistory?.provider_id || 'custom'}
+                新会话进入 {sessionHistory?.provider_id || 'custom'}；既有会话需单独迁移
               </div>
             </div>
             <div className="codex-head-actions">
               <div className="codex-action-meta">
                 <ShieldCheck size={15} />
-                {sessionHistory?.backup_available ? '已有会话备份账本' : '迁移时生成会话备份账本'}
+                {sessionHistory?.backup_available ? '可按账本恢复原 openai 会话' : '迁移前生成会话备份账本'}
               </div>
               <span className={`codex-status ${historyStatusKind}`}>
                 {sessionHistory?.active ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
@@ -211,7 +213,7 @@ export function CodexSettingsPanel({
                 className="btn"
                 onClick={onMigrateHistory}
                 disabled={migrateDisabled}
-                data-tooltip="迁移 openai/aether 既有会话"
+                data-tooltip="将 openai/aether 会话的 Provider 标记迁移到 custom"
               >
                 <Database className={migrateHistoryBusy ? 'spin' : undefined} size={16} />
                 迁移既有会话
@@ -220,7 +222,7 @@ export function CodexSettingsPanel({
                 className="btn"
                 onClick={onRestoreHistory}
                 disabled={restoreDisabled}
-                data-tooltip="按备份账本恢复官方会话"
+                data-tooltip="仅恢复账本中原属 openai 的会话，不恢复配置或其他 custom 会话"
               >
                 <RotateCcw className={restoreHistoryBusy ? 'spin' : undefined} size={16} />
                 恢复官方会话

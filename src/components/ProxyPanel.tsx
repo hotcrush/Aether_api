@@ -104,9 +104,9 @@ export function ProxyPanel({
             className="stat-item stat-quota stat-quota-button"
             onClick={onEditDailyBudget}
             data-tooltip={quotaDisplay.title}
-            aria-label="设置每日 USD 额度"
+            aria-label="设置每日 USD 预算"
           >
-            <span className="stat-label stat-tooltip">每日剩余 / 总额度</span>
+            <span className="stat-label stat-tooltip">每日预算剩余 / 总额</span>
             <span className="stat-value">{quotaDisplay.value}</span>
             <span className="stat-detail stat-support">{quotaDisplay.detail}</span>
             {quotaDisplay.secondary && (
@@ -211,17 +211,17 @@ function dailyBudgetDisplay(
     const remaining = Math.max(0, dailyBudgetUsd - todayCost)
     return {
       value: `${formatUsd(remaining)} / ${formatUsd(dailyBudgetUsd)}`,
-      detail: `今日已用 ${formatUsd(todayCost)}`,
+      detail: `今日估算 ${formatUsd(todayCost)}`,
       secondary,
-      title: `每日 USD 额度按本地时间统计，今日已用 ${formatUsd(todayCost)}，剩余 ${formatUsd(remaining)}。${longDescription}。点击修改每日额度。`,
+      title: `每日 USD 预算按本地时间统计，今日估算已用 ${formatUsd(todayCost)}，剩余 ${formatUsd(remaining)}；超出后剩余显示为 $0，仅用于展示，不参与路由或停用上游。${longDescription}。点击修改预算。`,
     }
   }
 
   return {
     value: '$-- / $--',
-    detail: '点击设置每日 USD 额度',
+    detail: '点击设置每日 USD 预算',
     secondary,
-    title: `设置每日 USD 总额度后，将使用当天请求的实际估算费用计算剩余金额。${longDescription}。`,
+    title: `设置每日 USD 预算后，将使用当天请求的估算费用计算剩余金额；仅用于展示，不参与路由或停用上游。${longDescription}。`,
   }
 }
 

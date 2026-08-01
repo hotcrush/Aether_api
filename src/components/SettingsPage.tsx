@@ -67,7 +67,7 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
               <Monitor size={16} />
               <div>
                 <span className="settings-row-label">开机自启动</span>
-                <span className="settings-row-desc">登录 Windows 后自动启动 Aether 并最小化到托盘</span>
+                <span className="settings-row-desc">登录 Windows 后自动启动 Aether；关闭主窗口后应用继续驻留托盘</span>
               </div>
             </div>
             <button
@@ -92,7 +92,7 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
                 <span className="settings-row-desc">
                   {appVersion
                     ? `v${appVersion.version} · ${appVersion.commit} · ${appVersion.build_time}`
-                    : '个人 AI 上游网关'}
+                    : '本地 OpenAI/Codex 多上游网关'}
                 </span>
               </div>
             </div>
@@ -106,7 +106,7 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
               <Trash2 size={16} />
               <div>
                 <span className="settings-row-label">回收站</span>
-                <span className="settings-row-desc">查看、恢复或永久删除已删除的上游账号</span>
+                <span className="settings-row-desc">查看、恢复或永久删除 OAuth 账号和 API Key 中转站</span>
               </div>
             </div>
             <button type="button" className="btn settings-feedback-btn" onClick={onOpenTrash}>

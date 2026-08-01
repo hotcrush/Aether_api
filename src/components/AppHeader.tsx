@@ -71,7 +71,7 @@ export function AppHeader({ proxy, notify, onSecretAction }: { proxy: ProxyInfo 
         <div className="brand-copy" data-tauri-drag-region>
           <h1 className="brand-name">Aether</h1>
           <div className="brand-meta">
-            个人 AI 上游网关
+            本地 OpenAI/Codex 上游网关
             {appVersion && (
               <span
                 className={`version-badge${updateStatus.state === 'available' ? ' has-update' : ''}`}

@@ -194,9 +194,11 @@ export function AccountToolbar({
               onClick={() => onAutoRefreshEnabledChange(!autoRefreshEnabled)}
             >
               <span className="auto-refresh-copy">
-                <strong>自动刷新</strong>
+                <strong>自动刷新用量</strong>
                 <small>
-                  {autoRefreshEnabled ? `每 ${autoRefreshIntervalMinutes} 分钟` : '已关闭'}
+                  {autoRefreshEnabled
+                    ? `每 ${autoRefreshIntervalMinutes} 分钟 · OAuth 与中转站`
+                    : '已关闭 · OAuth 与中转站'}
                 </small>
               </span>
               <span className="auto-refresh-switch" aria-hidden="true">

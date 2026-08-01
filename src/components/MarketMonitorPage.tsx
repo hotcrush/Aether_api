@@ -601,7 +601,7 @@ function ProductSection({
     verificationFilter,
   ])
 
-  // 按商品名称去重：同名商品仅保留最低价，记录店铺数与汇总库存
+  // 按商品名称去重：同名商品仅保留最低价，记录报价数与汇总库存
   const shopCountByName = useMemo(() => {
     const map = new Map<string, { shops: number; stock: number }>()
     for (const product of filtered) {
@@ -768,7 +768,7 @@ function ProductSection({
 
       <div className="market-result-bar">
         <span className="market-result-meta">
-          {visible.length} 个有货报价 · {productViewLabel(view)} · {priceScopeLabel(priceScope)}
+          {visible.length} 个有货商品 · {productViewLabel(view)} · {priceScopeLabel(priceScope)}
         </span>
         <nav className="market-pagination" aria-label="商品分页">
           <span>第 {currentPage}/{totalPages} 页、当前 {pageFirst}-{pageLast}/共 {visible.length}</span>
@@ -797,7 +797,7 @@ function ProductSection({
         </nav>
       </div>
       {!groups.length ? (
-        <MarketEmpty icon={<PackageSearch size={27} />} title="没有匹配的商品" detail="调整搜索、分类、店铺或价格范围。" />
+        <MarketEmpty icon={<PackageSearch size={27} />} title="没有匹配的商品" detail="调整搜索、分类、店铺、价格范围或接码状态。" />
       ) : (
         <div className="market-product-groups">
           {groups.map((group) => (
@@ -830,7 +830,7 @@ function ProductSection({
                         <strong>{product.name}</strong>
                         <small>
                           {product.shopName}
-                          {multiShop ? ` 等${dedupe.shops}家店` : ''}
+                          {multiShop ? ` · 共 ${dedupe.shops} 个报价` : ''}
                           {' · 库存 '}
                           {formatNumber(multiShop ? dedupe.stock : product.stockCount)}
                           {product.category === 'gptplus' ? ` · ${verificationLabel(product.verificationStatus)}` : ''}
@@ -1096,8 +1096,8 @@ function AlertsSection({
               {saving ? '保存中' : '保存规则'}
             </button>
           </header>
-          <SettingToggle label="启用市场提醒" detail="记录提醒并在应用内显示未读状态" checked={settings.enabled} onChange={(value) => update('enabled', value)} />
-          <SettingToggle label="系统通知" detail="Aether 在后台时发送桌面通知" checked={settings.nativeEnabled} disabled={!settings.enabled} onChange={(value) => update('nativeEnabled', value)} />
+          <SettingToggle label="桌面通知总开关" detail="事件始终入库；关闭只停桌面通知，K12/GPT Plus 到货无单独开关" checked={settings.enabled} onChange={(value) => update('enabled', value)} />
+          <SettingToggle label="系统通知" detail="通过 Windows 通知中心发送符合规则的事件" checked={settings.nativeEnabled} disabled={!settings.enabled} onChange={(value) => update('nativeEnabled', value)} />
           <div className={`market-notification-permission market-permission-${notificationPermission}`} role="status">
             {notificationPermission === 'granted' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
             <span className="market-permission-copy">
@@ -1112,11 +1112,11 @@ function AlertsSection({
             )}
           </div>
           <div className="market-setting-divider" />
-          <SettingToggle label="BUG TEAM 到货" detail="监控首次出现的 BUG TEAM 有货商品" checked={settings.bugTeamAvailable} disabled={!settings.enabled} onChange={(value) => update('bugTeamAvailable', value)} />
-          <SettingToggle label="商品售罄" detail="连续两次采集确认缺货后提醒" checked={settings.productUnavailable} disabled={!settings.enabled} onChange={(value) => update('productUnavailable', value)} />
-          <SettingToggle label="店铺健康" detail="连续失败及恢复时提醒" checked={settings.storeHealth} disabled={!settings.enabled} onChange={(value) => update('storeHealth', value)} />
-          <SettingToggle label="集中补库" detail="市场总库存短时显著增加时提醒" checked={settings.stockSurge} disabled={!settings.enabled} onChange={(value) => update('stockSurge', value)} />
-          <SettingToggle label="价格异常" detail="发现明显低价或高价商品时提醒" checked={settings.priceOutlier} disabled={!settings.enabled} onChange={(value) => update('priceOutlier', value)} />
+          <SettingToggle label="BUG TEAM 到货" detail="首次出现有货商品时发送桌面通知" checked={settings.bugTeamAvailable} disabled={!settings.enabled} onChange={(value) => update('bugTeamAvailable', value)} />
+          <SettingToggle label="商品售罄" detail="连续两次采集确认缺货后发送桌面通知" checked={settings.productUnavailable} disabled={!settings.enabled} onChange={(value) => update('productUnavailable', value)} />
+          <SettingToggle label="店铺健康" detail="连续失败或恢复时发送桌面通知" checked={settings.storeHealth} disabled={!settings.enabled} onChange={(value) => update('storeHealth', value)} />
+          <SettingToggle label="集中补库" detail="集中补库或疑似扫货/库存转移时发送桌面通知" checked={settings.stockSurge} disabled={!settings.enabled} onChange={(value) => update('stockSurge', value)} />
+          <SettingToggle label="价格异常" detail="发现明显低价或高价商品时发送桌面通知" checked={settings.priceOutlier} disabled={!settings.enabled} onChange={(value) => update('priceOutlier', value)} />
           <div className="market-setting-divider" />
           <SettingToggle label="静默时段" detail="静默期间仍记录事件，但不发送系统通知" checked={settings.quietHoursEnabled} disabled={!settings.enabled} onChange={(value) => update('quietHoursEnabled', value)} />
           <div className="market-quiet-hours">
@@ -1311,7 +1311,7 @@ function ShopEditorDialog({
           <label>
             <span>店铺 token</span>
             <input value={editor.input.token} onChange={(event) => update('token', event.target.value)} placeholder="例如 echo_dream" disabled={Boolean(editor.originalToken)} />
-            <small className="market-shop-hint">即店铺链接最后一段，如 liandx.com/shop/<b>echo_dream</b></small>
+            <small className="market-shop-hint">即店铺链接最后一段，如 pay.ldxp.cn/shop/<b>echo_dream</b></small>
           </label>
           <label className="market-shop-enabled">
             <input type="checkbox" checked={editor.input.enabled} onChange={(event) => update('enabled', event.target.checked)} />
@@ -1524,6 +1524,7 @@ function eventKindLabel(kind: string) {
     case 'store.degraded': return '店铺异常'
     case 'store.recovered': return '店铺恢复'
     case 'market.stock_surge': return '集中补库'
+    case 'market.suspected_hoarding': return '疑似扫货/库存转移'
     case 'product.price_low': return '低价信号'
     case 'product.price_high': return '高价信号'
     default: return '市场事件'

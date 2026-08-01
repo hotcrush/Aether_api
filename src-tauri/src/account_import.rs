@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 const MAX_IMPORT_BYTES: usize = 10 * 1024 * 1024;
+const MAX_AUTO_IMPORT_STRUCTURAL_MARKERS: usize = 262_144;
 const MAX_EMBEDDED_JSON_VALUES: usize = 4_096;
 const MAX_EMBEDDED_JSON_SCAN_ATTEMPTS: usize = 16_384;
 const MAX_FAILED_JSON_SCAN_WORK_MULTIPLIER: usize = 4;
@@ -89,6 +90,15 @@ pub fn parse_clipboard_import(content: &str) -> Result<ParsedClipboardImport, St
     if trimmed.is_empty() {
         return Err("剪贴板内容为空".to_string());
     }
+    if trimmed
+        .bytes()
+        .filter(|byte| matches!(byte, b'{' | b'}' | b'[' | b']' | b',' | b':'))
+        .take(MAX_AUTO_IMPORT_STRUCTURAL_MARKERS + 1)
+        .count()
+        > MAX_AUTO_IMPORT_STRUCTURAL_MARKERS
+    {
+        return Err("自动导入内容的 JSON 结构过于复杂".to_string());
+    }
 
     let extracted = extract_json_values(trimmed)?;
     let mut source = None;
@@ -121,33 +131,82 @@ fn account_from_classified_value(
     let object = value
         .as_object_mut()
         .ok_or_else(|| "自动识别的账号条目必须是 JSON 对象".to_string())?;
-    let shadow_fields: &[&str] = match source {
+    let allowed_fields: &[&str] = match source {
         ClipboardImportSource::Cpa => &[
-            "credentials",
-            "tokens",
-            "token",
-            "api_key",
-            "OPENAI_API_KEY",
-        ],
-        ClipboardImportSource::Sub2api => &[
-            "tokens",
-            "token",
+            "type",
+            "platform",
+            "name",
             "access_token",
             "refresh_token",
             "id_token",
             "client_id",
             "clientId",
-            "api_key",
-            "OPENAI_API_KEY",
-            "base_url",
-            "baseUrl",
+            "chatgpt_account_id",
+            "chatgptAccountId",
+            "account_id",
+            "accountId",
+            "chatgpt_user_id",
+            "chatgptUserId",
+            "user_id",
+            "userId",
+            "email",
+            "plan_type",
+            "planType",
+            "chatgpt_plan_type",
+            "chatgptPlanType",
             "expires_at",
             "expiresAt",
             "expired",
+            "priority",
+            "models",
+            "weight",
+            "concurrency",
+        ],
+        ClipboardImportSource::Sub2api => &[
+            "name",
+            "platform",
+            "type",
+            "credentials",
+            "priority",
+            "models",
+            "weight",
+            "concurrency",
         ],
     };
-    for field in shadow_fields {
-        object.remove(*field);
+    object.retain(|field, _| allowed_fields.contains(&field.as_str()));
+
+    if source == ClipboardImportSource::Sub2api {
+        let credentials = object
+            .get_mut("credentials")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| "Sub2API 账号缺少 credentials 对象".to_string())?;
+        const ALLOWED_CREDENTIAL_FIELDS: &[&str] = &[
+            "api_key",
+            "base_url",
+            "access_token",
+            "accessToken",
+            "refresh_token",
+            "refreshToken",
+            "id_token",
+            "idToken",
+            "client_id",
+            "clientId",
+            "chatgpt_account_id",
+            "chatgptAccountId",
+            "account_id",
+            "accountId",
+            "organization_id",
+            "organizationId",
+            "chatgpt_user_id",
+            "chatgptUserId",
+            "user_id",
+            "userId",
+            "email",
+            "plan_type",
+            "expires_at",
+            "models",
+        ];
+        credentials.retain(|field, _| ALLOWED_CREDENTIAL_FIELDS.contains(&field.as_str()));
     }
 
     let account = account_from_value(value)?;
@@ -793,11 +852,13 @@ fn parse_concurrency(value: &Value) -> Result<i64, String> {
                 .as_str()
                 .and_then(|raw| raw.trim().parse::<i64>().ok())
         })
-        .ok_or_else(|| "concurrency 必须是正整数".to_string())?;
-    if !(1..=1000).contains(&parsed) {
-        return Err("concurrency 必须在 1 到 1000 之间".to_string());
+        .ok_or_else(|| "concurrency 必须是非负整数".to_string())?;
+    if parsed < 0 {
+        return Err("concurrency 必须是非负整数".to_string());
     }
-    Ok(parsed)
+    // Sub2API uses zero for unlimited concurrency and permits limits above
+    // Aether's supported range. Saturate both cases at the local maximum.
+    Ok(if parsed == 0 { 1000 } else { parsed.min(1000) })
 }
 
 fn non_empty_or(value: String, fallback: &str) -> String {
@@ -847,6 +908,44 @@ mod tests {
         assert_eq!(accounts[0].weight, Some(1));
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("weight 必须在 1 到 1000 之间"));
+    }
+
+    #[test]
+    fn imports_unlimited_concurrency_as_supported_max_for_multiple_accounts() {
+        let contents = vec![r#"{
+            "type":"sub2api-data",
+            "accounts":[
+                {
+                    "name":"first",
+                    "platform":"openai",
+                    "type":"oauth",
+                    "concurrency":0,
+                    "credentials":{"refresh_token":"refresh-one"}
+                },
+                {
+                    "name":"second",
+                    "platform":"openai",
+                    "type":"oauth",
+                    "concurrency":"0",
+                    "credentials":{"refresh_token":"refresh-two"}
+                }
+            ]
+        }"#
+        .to_string()];
+
+        let (accounts, errors) = parse_import_contents(&contents);
+
+        assert!(errors.is_empty());
+        assert_eq!(accounts.len(), 2);
+        assert!(accounts
+            .iter()
+            .all(|account| account.concurrency == Some(1000)));
+    }
+
+    #[test]
+    fn clamps_large_import_concurrency_and_rejects_negative_values() {
+        assert_eq!(parse_concurrency(&serde_json::json!(1001)), Ok(1000));
+        assert!(parse_concurrency(&serde_json::json!(-1)).is_err());
     }
 
     #[test]
@@ -1083,11 +1182,16 @@ mod tests {
             "type":"codex",
             "refresh_token":"checked-refresh",
             "tokens":{"refresh_token":"nested-noise"},
-            "token":{"access_token":"nested-noise"}
+            "token":{"access_token":"nested-noise"},
+            "user":{"name":"nested-noise"},
+            "meta":{"label":"nested-noise","chatgpt_account_id":"nested-noise"},
+            "label":"nested-noise"
         }"#;
         let parsed = parse_clipboard_import(content).unwrap();
         assert_eq!(parsed.accounts[0].refresh_token, "checked-refresh");
         assert!(parsed.accounts[0].access_token.is_empty());
+        assert!(parsed.accounts[0].name.is_empty());
+        assert!(parsed.accounts[0].chatgpt_account_id.is_empty());
     }
 
     #[test]
@@ -1097,12 +1201,24 @@ mod tests {
             "type":"oauth",
             "access_token":"top-level-noise",
             "id_token":"top-level-noise",
-            "credentials":{"refresh_token":"checked-refresh"}
+            "account_id":"top-level-noise",
+            "user_id":"top-level-noise",
+            "email":"top-level-noise@example.com",
+            "meta":{"label":"top-level-noise"},
+            "label":"top-level-noise",
+            "credentials":{
+                "refresh_token":"checked-refresh",
+                "chatgpt_account_id":"credential-account",
+                "email":"credential@example.com"
+            }
         }"#;
         let parsed = parse_clipboard_import(content).unwrap();
         assert_eq!(parsed.accounts[0].refresh_token, "checked-refresh");
         assert!(parsed.accounts[0].access_token.is_empty());
         assert!(parsed.accounts[0].id_token.is_empty());
+        assert_eq!(parsed.accounts[0].chatgpt_account_id, "credential-account");
+        assert!(parsed.accounts[0].chatgpt_user_id.is_empty());
+        assert_eq!(parsed.accounts[0].email, "credential@example.com");
     }
 
     #[test]
@@ -1120,6 +1236,13 @@ mod tests {
         let mut accounts = Vec::new();
         assert!(collect_classified_account_values(value, &mut accounts).is_err());
         assert_eq!(accounts.len(), MAX_DETECTED_IMPORT_ACCOUNTS);
+    }
+
+    #[test]
+    fn auto_import_json_structure_is_bounded_before_parsing() {
+        let content = format!("[{}0]", "0,".repeat(MAX_AUTO_IMPORT_STRUCTURAL_MARKERS + 1));
+        let error = parse_clipboard_import(&content).unwrap_err();
+        assert_eq!(error, "自动导入内容的 JSON 结构过于复杂");
     }
 
     #[test]

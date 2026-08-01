@@ -115,9 +115,11 @@ export function ImportDialog({
     >
       <div className="import-options">
         <div className="import-formats">
-          <span>自动识别</span>
+          <span>支持格式</span>
           <strong>Sub2API</strong>
+          <strong>Codex auth.json</strong>
           <strong>CPA</strong>
+          <strong>Token / API Key</strong>
         </div>
         <label className="default-priority">
           <span>默认优先级</span>
@@ -159,7 +161,7 @@ export function ImportDialog({
           >
             <div>
               <UploadCloud size={25} />
-              <strong>拖放多个 JSON 文件</strong>
+              <strong>拖放 JSON 文件（最多 20 个）</strong>
               <button className="btn" type="button" onClick={() => fileInput.current?.click()}>
                 浏览文件
               </button>
@@ -196,7 +198,7 @@ export function ImportDialog({
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder="粘贴 auth.json、Sub2API 备份或 token，每行一条"
+          placeholder="粘贴 Codex auth.json、CPA/Sub2API JSON、OAuth Token 或 OpenAI API Key（Token 可每行一条）"
         />
       )}
 

@@ -20,7 +20,7 @@ pub(crate) fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 第二次启动（双击桌面图标）时唤起已隐藏的窗口
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
@@ -129,7 +129,7 @@ pub(crate) fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
                     "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
+                        if let Some(window) = app.get_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -144,7 +144,7 @@ pub(crate) fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
+                        if let Some(window) = app.get_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }

@@ -599,7 +599,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return deleted as T
     }
     case 'get_app_version':
-      return { version: '0.1.0-alpha.1', commit: '447e082', build_time: '2026-08-01' } as T
+      return { version: '0.1.0-alpha.3', commit: 'dev', build_time: '2026-08-02' } as T
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }

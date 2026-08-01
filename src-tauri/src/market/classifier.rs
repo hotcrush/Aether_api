@@ -71,9 +71,11 @@ pub fn classify_product(title: &str) -> Option<&'static str> {
         ],
     );
     if !account_signal {
+        let tool_compatibility = value.contains("sub2api") && value.contains("cpa");
         let team_signal = value.contains("team")
-            && contains_any(&value, &["刀", "美元", "美金", "usd", "$"])
-            && (value.contains("速刷") || (value.contains("sub2api") && value.contains("cpa")));
+            && (tool_compatibility
+                || (value.contains("速刷")
+                    && contains_any(&value, &["刀", "美元", "美金", "usd", "$"])));
         return team_signal.then_some("bugteam");
     }
 
@@ -98,6 +100,21 @@ pub fn classify_product(title: &str) -> Option<&'static str> {
         ],
     );
     (has_gpt && implicit_account && implicit_plus).then_some("gptplus")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_product;
+
+    #[test]
+    fn classifies_tool_compatible_weekly_team_as_bugteam() {
+        assert_eq!(
+            classify_product(
+                "【8月1日-17点50新车】周限 team，速刷号无任何质保，仅支持sub2api和cpa"
+            ),
+            Some("bugteam")
+        );
+    }
 }
 
 pub fn match_terms(title: &str) -> Vec<String> {

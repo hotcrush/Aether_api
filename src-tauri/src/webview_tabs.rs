@@ -484,11 +484,7 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
             true
         });
 
-    let host = app
-        .get_webview_window(MAIN_WEBVIEW_LABEL)
-        .ok_or_else(|| "Main application window is unavailable".to_string())?;
-    let webview = host
-        .as_ref()
+    let webview = caller
         .window()
         .add_child(
             builder,

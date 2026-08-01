@@ -44,7 +44,7 @@ export function DailyBudgetDialog({
   const submit = () => {
     const parsed = Number(value)
     if (!Number.isFinite(parsed) || parsed <= 0) {
-      setError('请输入大于 0 的每日美元额度')
+      setError('请输入大于 0 的每日美元预算')
       return
     }
     void persist(Math.round(parsed * 100) / 100)
@@ -53,7 +53,7 @@ export function DailyBudgetDialog({
   return (
     <Dialog
       open={open}
-      title="每日 USD 额度"
+      title="每日 USD 预算"
       onClose={onClose}
       small
       preventClose={busy}
@@ -61,7 +61,7 @@ export function DailyBudgetDialog({
         <>
           {limitUsd !== null && (
             <button className="btn btn-danger" onClick={() => void persist(null)} disabled={busy}>
-              <Trash2 size={15} />清除额度
+              <Trash2 size={15} />清除预算
             </button>
           )}
           <button className="btn" onClick={onClose} disabled={busy}>取消</button>
@@ -72,10 +72,11 @@ export function DailyBudgetDialog({
       }
     >
       <p className="confirm-copy">
-        按本地时间每天重新统计。今日已产生费用 <strong>${todayCost.toFixed(4)}</strong>。
+        按本地时间每天重新统计。今日估算费用 <strong>${todayCost.toFixed(4)}</strong>。
+        此预算仅用于本地展示，超出后剩余显示为 $0，不会停止代理、自动停用上游或参与路由。
       </p>
       <div className="field">
-        <label htmlFor="dailyBudgetUsd">每日总额度（USD）</label>
+        <label htmlFor="dailyBudgetUsd">每日预算（USD）</label>
         <div className="budget-input-wrap">
           <DollarSign size={15} />
           <input

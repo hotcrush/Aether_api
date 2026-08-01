@@ -33,7 +33,7 @@ export function DeleteAccountDialog({
       }
     >
       <p className="confirm-copy">
-        确定删除“{account?.name || '未命名'}”？本机保存的凭据也会一并移除。
+        确定将“{account?.name || '未命名'}”移入回收站？移入后不再参与路由，恢复后会重新启用；凭据仅在永久删除时移除。
       </p>
     </Dialog>
   )

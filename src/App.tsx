@@ -1123,7 +1123,7 @@ export default function App() {
   const updateDailyBudget = async (limitUsd: number | null) => {
     await saveDailyBudget(limitUsd)
     setDailyBudgetUsd(limitUsd)
-    notify(limitUsd === null ? '每日额度已清除' : `每日额度已设置为 $${limitUsd.toFixed(2)}`)
+    notify(limitUsd === null ? '每日预算已清除' : `每日预算已设置为 $${limitUsd.toFixed(2)}`)
   }
 
   const resetProxyAccessToken = async () => {

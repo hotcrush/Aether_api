@@ -24,7 +24,7 @@ pub fn show_market_notification(app: &AppHandle, event: &MarketEvent) -> Result<
             ) {
                 return;
             }
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
