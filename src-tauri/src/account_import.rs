@@ -86,18 +86,50 @@ pub fn parse_clipboard_import(content: &str) -> Result<ParsedClipboardImport, St
         return Err("剪贴板内容为空".to_string());
     }
 
-    let value = serde_json::from_str::<Value>(trimmed)
-        .map_err(|_| "剪贴板内容不是完整 JSON".to_string())?;
-    let source = classify_clipboard_value(&value)?;
-    let (accounts, errors) = parse_import_contents(&[trimmed.to_string()]);
-    if !errors.is_empty() || accounts.is_empty() {
+    // Fast path: entire content is valid JSON.
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        let source = classify_clipboard_value(&value)?;
+        let (accounts, errors) = parse_import_contents(&[trimmed.to_string()]);
+        if !errors.is_empty() || accounts.is_empty() {
+            let message = errors
+                .first()
+                .map(|error| error.message.clone())
+                .unwrap_or_else(|| "没有找到可导入的账号".to_string());
+            return Err(message);
+        }
+        return Ok(ParsedClipboardImport { source, accounts });
+    }
+
+    // Fallback: extract JSON values from mixed/noisy text.
+    let extracted = extract_json_values(trimmed);
+    if extracted.is_empty() {
+        return Err("剪贴板内容不是完整 JSON，也未找到可识别的 JSON 片段".to_string());
+    }
+    let source = classify_extracted_values(&extracted)?;
+    // Flatten and convert extracted values into accounts via the standard pipeline.
+    let mut flat_values = Vec::new();
+    for value in extracted {
+        flatten_value(value, &mut flat_values);
+    }
+    let mut accounts = Vec::new();
+    let mut errors = Vec::new();
+    for (index, value) in flat_values.into_iter().enumerate() {
+        match account_from_value(value) {
+            Ok(account) => accounts.push(account),
+            Err(message) => errors.push(ImportMessage {
+                index: index + 1,
+                name: String::new(),
+                message,
+            }),
+        }
+    }
+    if accounts.is_empty() {
         let message = errors
             .first()
             .map(|error| error.message.clone())
             .unwrap_or_else(|| "没有找到可导入的账号".to_string());
         return Err(message);
     }
-
     Ok(ParsedClipboardImport { source, accounts })
 }
 
@@ -114,6 +146,105 @@ fn classify_clipboard_value(value: &Value) -> Result<ClipboardImportSource, Stri
         return Ok(ClipboardImportSource::Sub2api);
     }
     Err("剪贴板内容不是受支持的 CPA 或 Sub2API JSON".to_string())
+}
+
+/// Classify multiple extracted JSON values, ensuring they are all the same source type.
+fn classify_extracted_values(values: &[Value]) -> Result<ClipboardImportSource, String> {
+    let mut source: Option<ClipboardImportSource> = None;
+    for value in values {
+        let detected = if is_cpa_account(value) {
+            ClipboardImportSource::Cpa
+        } else if is_sub2api_account(value) || is_sub2api_backup(value) {
+            ClipboardImportSource::Sub2api
+        } else if let Some(items) = value.as_array() {
+            // Array: classify by its elements.
+            if !items.is_empty() && items.iter().all(is_cpa_account) {
+                ClipboardImportSource::Cpa
+            } else if !items.is_empty() && items.iter().all(|v| is_sub2api_account(v) || is_sub2api_backup(v)) {
+                ClipboardImportSource::Sub2api
+            } else {
+                continue; // unrecognizable array – skip
+            }
+        } else {
+            continue; // unrecognizable object – skip
+        };
+        match source {
+            None => source = Some(detected),
+            Some(existing) if existing != detected => {
+                return Err("剪贴板中混合了 CPA 和 Sub2API 格式，请分开导入".to_string());
+            }
+            _ => {}
+        }
+    }
+    source.ok_or_else(|| "剪贴板内容不是受支持的 CPA 或 Sub2API JSON".to_string())
+}
+
+/// Scan mixed text and extract all complete top-level JSON values (objects or arrays).
+/// Noise lines (non-JSON text) are silently discarded.
+fn extract_json_values(text: &str) -> Vec<Value> {
+    let mut values = Vec::new();
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        let ch = bytes[i];
+        if ch == b'{' || ch == b'[' {
+            // Try to find the matching close bracket.
+            if let Some(end) = find_json_end(bytes, i) {
+                let candidate = &text[i..end];
+                if let Ok(value) = serde_json::from_str::<Value>(candidate) {
+                    values.push(value);
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    values
+}
+
+/// Starting at `start` (which must be `{` or `[`), find the byte offset just past
+/// the matching close bracket, respecting strings and escapes.
+fn find_json_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let open = bytes[start];
+    let close = if open == b'{' { b'}' } else { b']' };
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+    let mut i = start;
+    while i < bytes.len() {
+        let ch = bytes[i];
+        if escape_next {
+            escape_next = false;
+            i += 1;
+            continue;
+        }
+        if in_string {
+            match ch {
+                b'\\' => escape_next = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+        } else {
+            match ch {
+                b'"' => in_string = true,
+                b'{' | b'[' => depth += 1,
+                b'}' | b']' => {
+                    depth -= 1;
+                    if depth == 0 && ch == close {
+                        return Some(i + 1);
+                    }
+                    if depth < 0 {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 fn is_cpa_account(value: &Value) -> bool {
@@ -753,13 +884,44 @@ mod tests {
             r#"{"platform":"openai","type":"oauth","access_token":"flat"}"#,
             r#"{"type":"sub2api-data","accounts":[{"platform":"openai","type":"oauth","credentials":{"refresh_token":"ok"}},{"type":"codex","refresh_token":"mixed"}]}"#,
             r#"{"type":"sub2api-data","accounts":[{"platform":"openai","type":"oauth","credentials":{"refresh_token":"ok"}},{"platform":"openai","type":"api_key","credentials":{}}]}"#,
-            "{\"type\":\"codex\",\"refresh_token\":\"one\"}\n{\"type\":\"codex\",\"refresh_token\":\"two\"}",
             "sk-not-json",
         ];
 
         for value in invalid_values {
             assert!(parse_clipboard_import(value).is_err(), "accepted {value}");
         }
+    }
+
+    #[test]
+    fn clipboard_import_accepts_multiple_cpa_objects_with_noise() {
+        let content = "=== 卡密内容 ===\n{\"type\":\"codex\",\"access_token\":\"a1\",\"refresh_token\":\"r1\",\"email\":\"one@example.com\"}\n{\"type\":\"codex\",\"access_token\":\"a2\",\"refresh_token\":\"r2\",\"email\":\"two@example.com\"}\n=== 结束 ===";
+        let parsed = parse_clipboard_import(content).unwrap();
+        assert_eq!(parsed.source, ClipboardImportSource::Cpa);
+        assert_eq!(parsed.accounts.len(), 2);
+        assert_eq!(parsed.accounts[0].email, "one@example.com");
+        assert_eq!(parsed.accounts[1].email, "two@example.com");
+    }
+
+    #[test]
+    fn clipboard_import_accepts_multiple_sub2api_objects_with_noise() {
+        let content = "=== 卡密内容 ===\n{\"name\":\"a\",\"platform\":\"openai\",\"type\":\"oauth\",\"credentials\":{\"refresh_token\":\"r1\",\"email\":\"one@example.com\"}}\n{\"name\":\"b\",\"platform\":\"openai\",\"type\":\"oauth\",\"credentials\":{\"refresh_token\":\"r2\",\"email\":\"two@example.com\"}}";
+        let parsed = parse_clipboard_import(content).unwrap();
+        assert_eq!(parsed.source, ClipboardImportSource::Sub2api);
+        assert_eq!(parsed.accounts.len(), 2);
+    }
+
+    #[test]
+    fn clipboard_import_extracts_json_array_from_noise() {
+        let content = "some header text\n[{\"type\":\"codex\",\"refresh_token\":\"r1\",\"email\":\"a@b.com\"},{\"type\":\"codex\",\"refresh_token\":\"r2\",\"email\":\"c@d.com\"}]\nfooter";
+        let parsed = parse_clipboard_import(content).unwrap();
+        assert_eq!(parsed.source, ClipboardImportSource::Cpa);
+        assert_eq!(parsed.accounts.len(), 2);
+    }
+
+    #[test]
+    fn clipboard_import_rejects_mixed_cpa_and_sub2api() {
+        let content = "{\"type\":\"codex\",\"refresh_token\":\"r1\"}\n{\"name\":\"x\",\"platform\":\"openai\",\"type\":\"oauth\",\"credentials\":{\"refresh_token\":\"r2\"}}";
+        assert!(parse_clipboard_import(content).is_err());
     }
 
     #[test]

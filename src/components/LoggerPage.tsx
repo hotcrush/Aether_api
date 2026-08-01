@@ -2,6 +2,7 @@ import { Eraser, RefreshCw, Search, ScrollText } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clearRequestLogs, listRequestLogs } from '../lib/commands'
 import { errorText } from '../lib/format'
+import { formatTime, parseLogTime } from '../lib/time'
 import type { RequestLog, RequestLogQuery, RequestLogStatus } from '../types'
 
 const PAGE_SIZE = 100
@@ -233,7 +234,7 @@ export function LoggerPage() {
             <div className="logger-title"><ScrollText size={18} />Logger</div>
             <div className="logger-subtitle">
               {items.length.toLocaleString()} 次尝试 · {requestCount.toLocaleString()} 个请求
-              {lastUpdatedAt !== null && ` · 更新于 ${formatClock(lastUpdatedAt)}`}
+              {lastUpdatedAt !== null && ` · 更新于 ${formatTime(lastUpdatedAt)}`}
             </div>
           </div>
           <div className="logger-head-actions">
@@ -448,32 +449,6 @@ function mergeRequestLogs(current: RequestLog[], incoming: RequestLog[]) {
   for (const item of current) logs.set(item.id, item)
   for (const item of incoming) logs.set(item.id, item)
   return [...logs.values()].sort((left, right) => right.id - left.id)
-}
-
-function parseLogTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return { clock: '—', date: value || '未知时间', full: value || '未知时间' }
-  }
-  return {
-    clock: date.toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }),
-    date: date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
-    full: date.toLocaleString('zh-CN', { hour12: false }),
-  }
-}
-
-function formatClock(timestamp: number) {
-  return new Date(timestamp).toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  })
 }
 
 function formatDuration(value: number | null) {

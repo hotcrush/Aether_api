@@ -59,6 +59,19 @@ mod tests {
     }
 
     #[test]
+    fn luna_and_terra_use_the_v0169_rates() {
+        let terra = estimate_cost(&usage("gpt-5.6-terra"), None);
+        let terra_expected =
+            (1_000.0 * 2.0 + 400.0 * 0.2 + 100.0 * 2.5 + 300.0 * 12.0) * USD_PER_MILLION;
+        assert!((terra.total_cost - terra_expected).abs() < 1e-12);
+
+        let luna = estimate_cost(&usage("gpt-5.6-luna"), None);
+        let luna_expected =
+            (1_000.0 * 0.2 + 400.0 * 0.02 + 100.0 * 0.25 + 300.0 * 1.2) * USD_PER_MILLION;
+        assert!((luna.total_cost - luna_expected).abs() < 1e-12);
+    }
+
+    #[test]
     fn snapshot_aliases_match_but_unknown_models_do_not() {
         assert_eq!(
             estimate_cost(&usage("gpt-5.4-2026-03-05"), None).matched_model,

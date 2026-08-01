@@ -166,10 +166,9 @@ pub(super) fn oauth_target_url(uri: &Uri) -> Result<String, String> {
     let mut target = if is_models_path(path) {
         CHATGPT_CODEX_MODELS_URL.to_string()
     } else if is_responses_path(path) {
-        format!(
-            "{CHATGPT_CODEX_RESPONSES_URL}{}",
-            response_path_suffix(path)
-        )
+        let suffix = safe_response_path_suffix_from(path)
+            .ok_or_else(|| "Responses 子路径不符合安全规则".to_string())?;
+        format!("{CHATGPT_CODEX_RESPONSES_URL}{suffix}")
     } else {
         return Err(format!("OAuth 账号不支持端点 {path}"));
     };
@@ -192,7 +191,9 @@ pub(super) fn api_key_target_url(account: &Account, uri: &Uri) -> Result<String,
     let canonical_path = if is_models_path(uri.path()) {
         "/v1/models".to_string()
     } else if is_responses_path(uri.path()) {
-        format!("/v1/responses{}", response_path_suffix(uri.path()))
+        let suffix = safe_response_path_suffix_from(uri.path())
+            .ok_or_else(|| "Responses 子路径不符合安全规则".to_string())?;
+        format!("/v1/responses{suffix}")
     } else {
         uri.path().to_string()
     };

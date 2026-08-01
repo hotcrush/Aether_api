@@ -1,10 +1,10 @@
 {
   "identifier": "default",
-  "description": "Default capability for the main window",
-  "windows": ["main"],
+  "description": "Default capability for the trusted main application webview",
+  "webviews": ["main"],
   "permissions": [
     "core:default",
-    "shell:allow-open",
+    "notification:default",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
@@ -12,6 +12,7 @@
     "core:window:allow-is-maximized",
     "core:window:allow-hide",
     "core:window:allow-show",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "updater:default"
   ]
 }

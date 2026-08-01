@@ -1,4 +1,5 @@
 import { AlertCircle, Gauge, RefreshCw } from 'lucide-react'
+import { formatShortTime } from '../lib/time'
 import type { RelayUsageQueryState, RelayUsageSummary } from '../types'
 
 interface RelayUsagePanelProps {
@@ -53,7 +54,7 @@ function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuer
         <button
           className="quota-refresh relay-inline-refresh"
           onClick={onQuery}
-          data-tooltip={`刷新用量，上次查询 ${formatLocalTime(usage.fetched_at)}`}
+          data-tooltip={`刷新用量，上次查询 ${formatShortTime(usage.fetched_at)}`}
           aria-label="刷新中转站用量"
         >
           <RefreshCw size={11} />
@@ -108,18 +109,6 @@ function finiteNumber(value: number | null) {
 function formatUsd(value: number | null, digits: number) {
   const amount = finiteNumber(value)
   return amount === null ? '-' : `$${amount.toFixed(digits)}`
-}
-
-function formatLocalTime(value: number | string) {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  const date = Number.isFinite(numeric)
-    ? new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric)
-    : new Date(value)
-  return Number.isNaN(date.getTime()) ? '未知' : date.toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
 }
 
 function friendlyRelayError(error: string) {

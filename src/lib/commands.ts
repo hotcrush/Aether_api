@@ -4,6 +4,7 @@ import type {
   AccountQuota,
   AccountQuotaResult,
   AccountStatus,
+  AppVersion,
   CodexSessionHistoryMigrationResult,
   CodexSessionHistoryRestoreResult,
   CodexSessionHistoryStatus,
@@ -350,8 +351,6 @@ function previewQuota(accountId: string): AccountQuota {
         reset_at: Math.floor((fetchedAt + 3 * 86_400_000) / 1000),
         num_requests: 527,
         num_tokens: 64_800_000,
-        allowed_amount: 57.25,
-        used_amount: accountId === 'oauth-pro' ? 21.41 : 46.37,
       },
       secondary_window: {
         used_percent: accountId === 'oauth-pro' ? 12 : 44,
@@ -360,8 +359,6 @@ function previewQuota(accountId: string): AccountQuota {
         reset_after_seconds: accountId === 'oauth-pro' ? 7800 : undefined,
         num_requests: 42,
         num_tokens: 5_200_000,
-        allowed_amount: 57.25,
-        used_amount: accountId === 'oauth-pro' ? 6.87 : 25.19,
       },
     },
     additional_rate_limits: accountId === 'oauth-pro'
@@ -416,6 +413,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         unpriced_tokens: 1280,
         total_tokens: 284750,
         total_cost: 0.004216,
+        today_cost: 0.003184,
         pricing_updated_at: '2026-07-31',
         pricing_source: 'LiteLLM / Sub2API pricing snapshot',
         account_capacities: {
@@ -441,6 +439,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return {
         candidate_id: 'preview-clipboard-account',
         source: clipboardPreview === 'cpa' ? 'cpa' : 'sub2api',
+        detected_from: 'clipboard',
         account_count: 1,
         accounts: [{
           name: '开发账号',
@@ -468,7 +467,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     case 'test_account':
       return '连接正常，响应耗时 286ms' as T
     case 'open_relay_site':
-      return undefined as T
+      return 'https://relay.example/' as T
     case 'set_account_status': {
       const target = previewAccounts.find((account) => account.id === args?.id)
       if (target) target.status = args?.status as AccountStatus
@@ -545,6 +544,23 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         String(args?.value ?? ''),
       )
       return undefined as T
+    case 'merge_cache_entries': {
+      const storageKey = `${PREVIEW_CACHE_PREFIX}${String(args?.key ?? '')}`
+      const currentRaw = window.localStorage.getItem(storageKey)
+      let current: Record<string, unknown> = {}
+      try {
+        const parsed = currentRaw ? JSON.parse(currentRaw) : {}
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed
+      } catch {
+        current = {}
+      }
+      const entries = args?.entries
+      if (entries && typeof entries === 'object' && !Array.isArray(entries)) {
+        Object.assign(current, entries)
+      }
+      window.localStorage.setItem(storageKey, JSON.stringify(current))
+      return undefined as T
+    }
     case 'query_account_quota':
       if (args?.id === 'oauth-disabled') throw new Error('OAuth token 已失效，请刷新后重试')
       return previewQuota(String(args?.id)) as T
@@ -613,7 +629,7 @@ export const testAccount = (id: string) =>
   call<string>('test_account', { id })
 
 export const openRelaySite = (id: string) =>
-  call<void>('open_relay_site', { id })
+  call<string>('open_relay_site', { id })
 
 export const setAccountStatus = (id: string, status: AccountStatus) =>
   call<boolean>('set_account_status', { id, status })
@@ -680,3 +696,8 @@ export const getCache = (key: string) =>
 
 export const setCache = (key: string, value: string) =>
   call<void>('set_cache', { key, value })
+
+export const mergeCacheEntries = (key: string, entries: Record<string, unknown>) =>
+  call<void>('merge_cache_entries', { key, entries })
+
+export const getAppVersion = () => call<AppVersion>('get_app_version')

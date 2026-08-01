@@ -22,6 +22,68 @@ fn stores_and_updates_account_priority() {
 }
 
 #[test]
+fn reimporting_trashed_account_restores_it() {
+    let db = Db::new(Path::new(":memory:")).unwrap();
+    let imported = NewAccount {
+        name: "Restored account".to_string(),
+        account_type: "oauth".to_string(),
+        access_token: "access-restored".to_string(),
+        refresh_token: "refresh-restored".to_string(),
+        email: "restored@example.com".to_string(),
+        ..NewAccount::default()
+    };
+    let (account, action) = db.upsert_account(&imported).unwrap();
+    assert_eq!(action, UpsertAction::Created);
+    assert!(db.delete_account(&account.id).unwrap());
+    assert!(db.list_accounts().unwrap().is_empty());
+
+    let (restored, action) = db.upsert_account(&imported).unwrap();
+    assert_eq!(action, UpsertAction::Updated);
+    assert_eq!(restored.id, account.id);
+    assert_eq!(restored.status, "active");
+    assert_eq!(db.list_accounts().unwrap().len(), 1);
+    assert!(db.list_trashed_accounts().unwrap().is_empty());
+}
+
+#[test]
+fn merges_one_quota_cache_entry_without_losing_complete_usage_fields() {
+    let db = Db::new(Path::new(":memory:")).unwrap();
+    db.set_setting(
+        "aether:quota_cache",
+        r#"{"account-a":{"quota":{"plan_type":"plus","additional_rate_limits":[{"limit_name":"Codex"}],"rate_limit":{"primary_window":{"num_requests":42,"used_percent":10}}},"cached_at":1000},"account-b":{"quota":{"plan_type":"team"},"cached_at":1000}}"#,
+    )
+    .unwrap();
+
+    db.merge_json_setting_entries(
+        "aether:quota_cache",
+        &[(
+            "account-a".to_string(),
+            r#"{"quota":{"rate_limit":{"primary_window":{"used_percent":25,"remaining_percent":75}},"fetched_at":2000},"cached_at":2000000}"#.to_string(),
+        )],
+    )
+    .unwrap();
+
+    let value: serde_json::Value =
+        serde_json::from_str(&db.get_setting("aether:quota_cache").unwrap().unwrap()).unwrap();
+    assert_eq!(
+        value.pointer("/account-a/quota/rate_limit/primary_window/used_percent"),
+        Some(&json!(25))
+    );
+    assert_eq!(
+        value.pointer("/account-a/quota/rate_limit/primary_window/num_requests"),
+        Some(&json!(42))
+    );
+    assert_eq!(
+        value.pointer("/account-a/quota/additional_rate_limits/0/limit_name"),
+        Some(&json!("Codex"))
+    );
+    assert_eq!(
+        value.pointer("/account-b/quota/plan_type"),
+        Some(&json!("team"))
+    );
+}
+
+#[test]
 fn stores_exports_and_preserves_routing_configuration() {
     let db = Db::new(Path::new(":memory:")).unwrap();
     let (account, action) = db
@@ -189,7 +251,7 @@ fn migrates_legacy_account_table_with_routing_defaults() {
                 api_key TEXT NOT NULL DEFAULT '',
                 base_url TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
              );
              INSERT INTO accounts (id, name, api_key)
              VALUES ('legacy', 'Legacy API Key', 'sk-legacy');",

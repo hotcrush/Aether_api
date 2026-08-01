@@ -7,11 +7,22 @@ fn test_state() -> ProxyState {
         db: Arc::new(Db::new(std::path::Path::new(":memory:")).unwrap()),
         client: reqwest::Client::new(),
         access_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(String::new()))),
+        app_handle: None,
         capacity: Arc::new(CapacityRegistry::default()),
-        cooldowns: Mutex::new(HashMap::new()),
-        sticky_routes: Mutex::new(HashMap::new()),
+        cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),
+        stream_quarantines: Cache::builder().time_to_live(STREAM_QUARANTINE_TTL).build(),
+        quota_snapshot_throttle: Cache::builder()
+            .time_to_live(QUOTA_SNAPSHOT_THROTTLE)
+            .build(),
+        sticky_routes: Cache::builder()
+            .time_to_idle(STICKY_ROUTE_TTL)
+            .max_capacity(MAX_STICKY_ROUTES)
+            .build(),
         weighted_schedules: Mutex::new(HashMap::new()),
         refresh_locks: Mutex::new(HashMap::new()),
+        rate_limiter: RateLimiter::dashmap(Quota::per_second(
+            NonZeroU32::new(DEFAULT_ACCOUNT_RPS).unwrap(),
+        )),
     }
 }
 
@@ -132,6 +143,47 @@ fn maps_supported_response_aliases() {
         response_path_suffix("/backend-api/codex/responses/input_tokens"),
         "/input_tokens"
     );
+}
+
+#[test]
+fn responses_subpaths_use_a_closed_safe_character_set() {
+    for path in [
+        "/responses",
+        "/v1/responses/compact",
+        "/backend-api/codex/responses/input_tokens",
+        "/v1/responses/resp_123-abc/cancel",
+    ] {
+        assert!(is_forwardable_responses_path(path), "rejected {path}");
+    }
+
+    for path in [
+        "/v1/responses/..",
+        "/v1/responses/./cancel",
+        "/v1/responses//compact",
+        "/v1/responses/compact/",
+        "/v1/responses/%2e%2e/admin",
+        "/v1/responses/compact?embedded",
+        "/v1/responses/中文",
+    ] {
+        assert!(!is_forwardable_responses_path(path), "accepted {path}");
+    }
+
+    let oversized_segment = format!("/v1/responses/{}", "a".repeat(129));
+    assert!(!is_forwardable_responses_path(&oversized_segment));
+
+    let too_many_segments = format!("/v1/responses/{}", ["a"; 9].join("/"));
+    assert!(!is_forwardable_responses_path(&too_many_segments));
+}
+
+#[test]
+fn upstream_url_builders_reject_unsafe_response_suffixes() {
+    let uri: Uri = "/v1/responses/%2e%2e/admin".parse().unwrap();
+    assert!(oauth_target_url(&uri).is_err());
+
+    let mut relay = scheduling_account("relay", 1);
+    relay.account_type = "api_key".to_string();
+    relay.base_url = "https://relay.example/v1".to_string();
+    assert!(api_key_target_url(&relay, &uri).is_err());
 }
 
 #[test]
@@ -301,6 +353,33 @@ async fn router_accepts_payloads_above_axums_default_limit() {
 }
 
 #[tokio::test]
+async fn router_rejects_unsafe_response_subpaths_before_loading_accounts() {
+    let state = test_state();
+    state
+        .access_token
+        .store(Arc::new("local-test-token".to_string()));
+    let app = build_proxy_router(Arc::new(state), MAX_PROXY_REQUEST_BODY_SIZE);
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method(Method::POST)
+                .uri("/v1/responses/%2e%2e/admin")
+                .header(header::AUTHORIZATION, "Bearer local-test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body.pointer("/error/type"), Some(&json!("not_found_error")));
+}
+
+#[tokio::test]
 async fn router_returns_openai_error_above_configured_body_limit() {
     const TEST_LIMIT: usize = 1024;
 
@@ -370,11 +449,46 @@ fn cooldown_is_never_shortened() {
     let state = test_state();
     let key = CooldownKey::Account("account".to_string());
     state.cool_down_account("account", Duration::from_secs(300));
-    let first = state.cooldowns.lock().unwrap()[&key];
+    let first = state.cooldowns.get(&key).unwrap();
     state.cool_down_account("account", Duration::from_secs(20));
-    let second = state.cooldowns.lock().unwrap()[&key];
+    let second = state.cooldowns.get(&key).unwrap();
 
     assert!(second >= first);
+}
+
+#[test]
+fn stream_quarantine_prefers_healthy_accounts_and_fails_open_when_all_are_quarantined() {
+    let state = test_state();
+    let capability = responses_capability("gpt-5");
+    let primary = scheduling_account("primary", 1);
+    let backup = scheduling_account("backup", 1);
+
+    state.quarantine_stream(&primary.id, &capability, CooldownScope::Account);
+    let (ordered, _, fail_open) = state.ordered_accounts_for_request(
+        vec![primary.clone(), backup.clone()],
+        None,
+        &capability,
+    );
+    assert!(!fail_open);
+    assert_eq!(ordered[0].id, backup.id);
+
+    state.quarantine_stream(&backup.id, &capability, CooldownScope::Account);
+    let (ordered, retry_after, fail_open) = state.ordered_accounts_for_request(
+        vec![primary.clone(), backup.clone()],
+        None,
+        &capability,
+    );
+    assert!(fail_open);
+    assert_eq!(retry_after, None);
+    assert_eq!(ordered.len(), 2);
+
+    state.cool_down_account(&primary.id, Duration::from_secs(60));
+    state.cool_down_account(&backup.id, Duration::from_secs(60));
+    let (ordered, retry_after, fail_open) =
+        state.ordered_accounts_for_request(vec![primary, backup], None, &capability);
+    assert!(!fail_open);
+    assert!(ordered.is_empty());
+    assert!(retry_after.is_some());
 }
 
 #[test]
@@ -570,14 +684,15 @@ fn stream_observer_records_late_usage_and_failure() {
         b"data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}}\n\n",
     );
     assert_eq!(state.db.total_tokens().unwrap(), 5);
-    assert!(state.sticky_routes.lock().unwrap().contains_key(&42));
+    assert!(state.sticky_routes.contains_key(&42));
 
     observer.observe_chunk(
         b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"late failure\"}}}\n\n",
     );
     let cooldown_key = capability.cooldown_key(&account.id).unwrap();
-    assert!(state.cooldowns.lock().unwrap().contains_key(&cooldown_key));
-    assert!(!state.sticky_routes.lock().unwrap().contains_key(&42));
+    assert!(state.cooldowns.contains_key(&cooldown_key));
+    assert!(!state.stream_quarantines.contains_key(&cooldown_key));
+    assert!(!state.sticky_routes.contains_key(&42));
     assert!(state
         .db
         .get_account(&account.id)
@@ -601,12 +716,48 @@ fn stream_observer_records_late_usage_and_failure() {
     );
     incomplete.observe_chunk(b"data: {\"type\":\"response.created\"}\n\n");
     incomplete.record_eof();
-    assert!(state
-        .cooldowns
-        .lock()
-        .unwrap()
-        .contains_key(&incomplete_capability.cooldown_key(&account.id).unwrap()));
-    assert!(!state.sticky_routes.lock().unwrap().contains_key(&43));
+    let incomplete_key = incomplete_capability.cooldown_key(&account.id).unwrap();
+    assert!(state.stream_quarantines.contains_key(&incomplete_key));
+    assert!(!state.cooldowns.contains_key(&incomplete_key));
+    assert!(!state.sticky_routes.contains_key(&43));
+}
+
+#[tokio::test]
+async fn oauth_sse_to_json_keeps_quota_and_rate_limit_headers() {
+    let upstream = reqwest::Response::from(
+        axum::http::Response::builder()
+            .status(StatusCode::OK)
+            .header(reqwest::header::CONTENT_TYPE, "text/event-stream")
+            .header("x-codex-primary-used-percent", "42")
+            .header("x-ratelimit-remaining-tokens", "149984")
+            .body(reqwest::Body::from(
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\"}}\n\n",
+            ))
+            .unwrap(),
+    );
+
+    let (response, _, completion_deferred) = to_client_response(upstream, true, false, None)
+        .await
+        .unwrap();
+    assert!(!completion_deferred);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-codex-primary-used-percent")
+            .unwrap(),
+        "42"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-ratelimit-remaining-tokens")
+            .unwrap(),
+        "149984"
+    );
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/json"
+    );
 }
 
 #[tokio::test]

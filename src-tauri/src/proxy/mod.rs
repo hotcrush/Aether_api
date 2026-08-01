@@ -21,9 +21,12 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
+use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
+use moka::sync::Cache;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
+use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -37,13 +40,14 @@ use crate::db::{Account, Db, RequestLogStart, RequestLogUsage};
 use crate::logger::RequestLogHandle;
 use crate::oauth;
 use crate::pricing::{estimate_cost, UsageBreakdown};
+use crate::quota;
 
 const CHATGPT_CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const CHATGPT_CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
 const CODEX_USER_AGENT: &str = "codex_cli_rs/0.144.1 (Windows 11; x86_64) Windows_Terminal";
 const CODEX_VERSION: &str = "0.144.1";
 const STICKY_ROUTE_TTL: Duration = Duration::from_secs(2 * 60 * 60);
-const MAX_STICKY_ROUTES: usize = 4096;
+const MAX_STICKY_ROUTES: u64 = 4096;
 const WEIGHTED_SCHEDULE_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_WEIGHTED_SCHEDULES: usize = 4096;
 const MAX_ACCOUNT_ATTEMPTS: usize = 3;
@@ -52,6 +56,15 @@ const UPSTREAM_ERROR_BODY_BUDGET: Duration = Duration::from_secs(2);
 const MAX_STREAM_BOOTSTRAP_BYTES: usize = 64 * 1024;
 const MAX_STREAM_OBSERVER_EVENT_BYTES: usize = 256 * 1024;
 const MAX_PROXY_REQUEST_BODY_SIZE: usize = 256 * 1024 * 1024;
+/// Global TTL for cooldown entries (max cooldown is 5 minutes, this adds margin).
+const COOLDOWN_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const STREAM_QUARANTINE_TTL: Duration = Duration::from_secs(10 * 60);
+const STREAM_QUARANTINE_DURATION: Duration = Duration::from_secs(20);
+const QUOTA_SNAPSHOT_THROTTLE: Duration = Duration::from_secs(5);
+/// Default per-account rate limit: requests per second.
+const DEFAULT_ACCOUNT_RPS: u32 = 10;
+
+type AccountRateLimiter = DefaultKeyedRateLimiter<String>;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum EndpointFamily {
@@ -237,11 +250,6 @@ impl Display for PrepareResponseError {
     }
 }
 
-struct StickyRoute {
-    account_id: String,
-    last_seen: Instant,
-}
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct SchedulerKey {
     endpoint: EndpointFamily,
@@ -258,11 +266,16 @@ pub struct ProxyState {
     pub db: Arc<Db>,
     pub client: reqwest::Client,
     pub access_token: Arc<arc_swap::ArcSwap<String>>,
+    app_handle: Option<tauri::AppHandle>,
     capacity: Arc<CapacityRegistry>,
-    cooldowns: Mutex<HashMap<CooldownKey, Instant>>,
-    sticky_routes: Mutex<HashMap<u64, StickyRoute>>,
+    cooldowns: Cache<CooldownKey, Instant>,
+    stream_quarantines: Cache<CooldownKey, Instant>,
+    quota_snapshot_throttle: Cache<String, ()>,
+    sticky_routes: Cache<u64, String>,
     weighted_schedules: Mutex<HashMap<SchedulerKey, WeightedSchedule>>,
     refresh_locks: Mutex<HashMap<String, Weak<AsyncMutex<()>>>>,
+    /// Per-account token bucket rate limiter.
+    rate_limiter: AccountRateLimiter,
 }
 
 #[derive(Clone, Copy)]
@@ -281,40 +294,68 @@ impl ProxyState {
         route_key: Option<u64>,
         capability: &RequestCapability,
     ) -> (Vec<Account>, Option<u64>) {
+        self.ordered_accounts_inner(accounts, route_key, capability, false)
+    }
+
+    fn ordered_accounts_for_request(
+        &self,
+        accounts: Vec<Account>,
+        route_key: Option<u64>,
+        capability: &RequestCapability,
+    ) -> (Vec<Account>, Option<u64>, bool) {
+        let candidates = accounts.clone();
+        let (ordered, retry_after) = self.ordered_accounts(accounts, route_key, capability);
+        if !ordered.is_empty() || !self.all_stream_quarantined(&candidates, capability) {
+            return (ordered, retry_after, false);
+        }
+
+        let (fail_open, _) = self.ordered_accounts_inner(candidates, route_key, capability, true);
+        if fail_open.is_empty() {
+            (fail_open, retry_after, false)
+        } else {
+            (fail_open, None, true)
+        }
+    }
+
+    fn ordered_accounts_inner(
+        &self,
+        accounts: Vec<Account>,
+        route_key: Option<u64>,
+        capability: &RequestCapability,
+        ignore_stream_quarantines: bool,
+    ) -> (Vec<Account>, Option<u64>) {
         let now = Instant::now();
-        let sticky_id = route_key.and_then(|key| self.sticky_account(key, now));
-        let mut cooldowns = self
-            .cooldowns
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        cooldowns.retain(|_, until| *until > now);
+        let sticky_id = route_key.and_then(|key| self.sticky_account(key));
         let mut earliest_available = None;
         let available = accounts
             .into_iter()
             .filter_map(|account| {
-                let account_key = CooldownKey::Account(account.id.clone());
-                let capability_key = capability.cooldown_key(&account.id);
-                let blocked_until = cooldowns
-                    .get(&account_key)
-                    .copied()
-                    .into_iter()
-                    .chain(
-                        capability_key
-                            .as_ref()
-                            .and_then(|key| cooldowns.get(key).copied()),
-                    )
-                    .max();
+                let generic_until =
+                    self.active_block_until(&self.cooldowns, &account.id, capability, now);
+                let stream_until = (!ignore_stream_quarantines)
+                    .then(|| {
+                        self.active_block_until(
+                            &self.stream_quarantines,
+                            &account.id,
+                            capability,
+                            now,
+                        )
+                    })
+                    .flatten();
+                let blocked_until = generic_until.into_iter().chain(stream_until).max();
                 if let Some(until) = blocked_until {
                     earliest_available = Some(
                         earliest_available.map_or(until, |earliest: Instant| earliest.min(until)),
                     );
+                    None
+                } else if !self.check_rate_limit(&account.id) {
+                    // Rate-limited: skip this account for now
                     None
                 } else {
                     Some(account)
                 }
             })
             .collect::<Vec<_>>();
-        drop(cooldowns);
 
         let retry_after = if available.is_empty() {
             earliest_available.map(|until| {
@@ -328,6 +369,36 @@ impl ProxyState {
             self.order_by_priority(available, sticky_id.as_deref(), capability),
             retry_after,
         )
+    }
+
+    fn active_block_until(
+        &self,
+        cache: &Cache<CooldownKey, Instant>,
+        account_id: &str,
+        capability: &RequestCapability,
+        now: Instant,
+    ) -> Option<Instant> {
+        let account_key = CooldownKey::Account(account_id.to_string());
+        let capability_key = capability.cooldown_key(account_id);
+        cache
+            .get(&account_key)
+            .into_iter()
+            .chain(capability_key.as_ref().and_then(|key| cache.get(key)))
+            .filter(|until| *until > now)
+            .max()
+    }
+
+    fn all_stream_quarantined(&self, accounts: &[Account], capability: &RequestCapability) -> bool {
+        !accounts.is_empty()
+            && accounts.iter().all(|account| {
+                self.active_block_until(
+                    &self.stream_quarantines,
+                    &account.id,
+                    capability,
+                    Instant::now(),
+                )
+                .is_some()
+            })
     }
 
     fn order_by_priority(
@@ -433,64 +504,33 @@ impl ProxyState {
         winner
     }
 
-    fn sticky_account(&self, key: u64, now: Instant) -> Option<String> {
-        let mut routes = self
-            .sticky_routes
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        routes.retain(|_, route| now.duration_since(route.last_seen) < STICKY_ROUTE_TTL);
-        let route = routes.get_mut(&key)?;
-        route.last_seen = now;
-        Some(route.account_id.clone())
+    fn sticky_account(&self, key: u64) -> Option<String> {
+        // moka's time_to_idle automatically extends TTL on access
+        self.sticky_routes.get(&key)
     }
 
     fn bind_route(&self, key: Option<u64>, account_id: &str) {
         let Some(key) = key else { return };
-        let now = Instant::now();
-        let mut routes = self
-            .sticky_routes
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        routes.retain(|_, route| now.duration_since(route.last_seen) < STICKY_ROUTE_TTL);
-        if routes.len() >= MAX_STICKY_ROUTES && !routes.contains_key(&key) {
-            if let Some(oldest) = routes
-                .iter()
-                .min_by_key(|(_, route)| route.last_seen)
-                .map(|(key, _)| *key)
-            {
-                routes.remove(&oldest);
-            }
-        }
-        routes.insert(
-            key,
-            StickyRoute {
-                account_id: account_id.to_string(),
-                last_seen: now,
-            },
-        );
+        self.sticky_routes.insert(key, account_id.to_string());
     }
 
     fn unbind_route(&self, key: Option<u64>, account_id: &str) {
         let Some(key) = key else { return };
-        let mut routes = self
-            .sticky_routes
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if routes.get(&key).map(|route| route.account_id.as_str()) == Some(account_id) {
-            routes.remove(&key);
+        if self.sticky_routes.get(&key).as_deref() == Some(account_id) {
+            self.sticky_routes.remove(&key);
         }
     }
 
-    fn cool_down_key(&self, key: CooldownKey, duration: Duration) {
+    fn block_key(cache: &Cache<CooldownKey, Instant>, key: CooldownKey, duration: Duration) {
         let until = Instant::now() + duration;
-        let mut cooldowns = self
-            .cooldowns
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        cooldowns
-            .entry(key)
-            .and_modify(|current| *current = (*current).max(until))
-            .or_insert(until);
+        cache.entry(key).and_compute_with(|entry| match entry {
+            Some(entry) if *entry.value() >= until => moka::ops::compute::Op::Nop,
+            _ => moka::ops::compute::Op::Put(until),
+        });
+    }
+
+    fn cool_down_key(&self, key: CooldownKey, duration: Duration) {
+        Self::block_key(&self.cooldowns, key, duration);
     }
 
     fn cool_down_account(&self, account_id: &str, duration: Duration) {
@@ -524,15 +564,38 @@ impl ProxyState {
         }
     }
 
+    fn quarantine_stream(
+        &self,
+        account_id: &str,
+        capability: &RequestCapability,
+        scope: CooldownScope,
+    ) {
+        let key = match scope {
+            CooldownScope::Account => CooldownKey::Account(account_id.to_string()),
+            CooldownScope::Capability => capability
+                .cooldown_key(account_id)
+                .unwrap_or_else(|| CooldownKey::Account(account_id.to_string())),
+        };
+        Self::block_key(&self.stream_quarantines, key, STREAM_QUARANTINE_DURATION);
+    }
+
     fn clear_cooldown(&self, account_id: &str, capability: &RequestCapability) {
-        let mut cooldowns = self
-            .cooldowns
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        cooldowns.remove(&CooldownKey::Account(account_id.to_string()));
-        if let Some(key) = capability.cooldown_key(account_id) {
-            cooldowns.remove(&key);
+        let keys = [
+            CooldownKey::Account(account_id.to_string()),
+            capability
+                .cooldown_key(account_id)
+                .unwrap_or_else(|| CooldownKey::Account(account_id.to_string())),
+        ];
+        for key in keys {
+            self.cooldowns.remove(&key);
+            self.stream_quarantines.remove(&key);
         }
+    }
+
+    /// Check if an account is allowed to make a request under the rate limit.
+    /// Returns true if allowed, false if rate-limited.
+    fn check_rate_limit(&self, account_id: &str) -> bool {
+        self.rate_limiter.check_key(&account_id.to_string()).is_ok()
     }
 
     fn refresh_lock(&self, account_id: &str) -> Arc<AsyncMutex<()>> {
@@ -556,16 +619,28 @@ pub async fn start_proxy_server(
     access_token: Arc<arc_swap::ArcSwap<String>>,
     running: Arc<AtomicBool>,
     capacity: Arc<CapacityRegistry>,
+    app_handle: tauri::AppHandle,
 ) {
     let state = Arc::new(ProxyState {
         db,
         client: crate::dns::build_client(600, 15),
         access_token,
+        app_handle: Some(app_handle),
         capacity,
-        cooldowns: Mutex::new(HashMap::new()),
-        sticky_routes: Mutex::new(HashMap::new()),
+        cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),
+        stream_quarantines: Cache::builder().time_to_live(STREAM_QUARANTINE_TTL).build(),
+        quota_snapshot_throttle: Cache::builder()
+            .time_to_live(QUOTA_SNAPSHOT_THROTTLE)
+            .build(),
+        sticky_routes: Cache::builder()
+            .time_to_idle(STICKY_ROUTE_TTL)
+            .max_capacity(MAX_STICKY_ROUTES)
+            .build(),
         weighted_schedules: Mutex::new(HashMap::new()),
         refresh_locks: Mutex::new(HashMap::new()),
+        rate_limiter: RateLimiter::dashmap(Quota::per_second(
+            NonZeroU32::new(DEFAULT_ACCOUNT_RPS).unwrap(),
+        )),
     });
 
     let app = build_proxy_router(state, MAX_PROXY_REQUEST_BODY_SIZE);
@@ -603,7 +678,8 @@ fn build_proxy_router(state: Arc<ProxyState>, body_limit: usize) -> Router {
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
-                .allow_headers(Any),
+                .allow_headers(Any)
+                .expose_headers(Any),
         )
         .with_state(state)
 }

@@ -48,6 +48,13 @@ async function readCache(): Promise<CacheMap | null> {
           && typeof (value as CacheEntry).cached_at === 'number'
           && Number.isFinite((value as CacheEntry).cached_at)
           && (
+            (value as CacheEntry).last_attempt_at === undefined
+            || (
+              typeof (value as CacheEntry).last_attempt_at === 'number'
+              && Number.isFinite((value as CacheEntry).last_attempt_at)
+            )
+          )
+          && (
             Boolean((value as CacheEntry).usage && typeof (value as CacheEntry).usage === 'object')
             || typeof (value as CacheEntry).error === 'string'
           ),

@@ -1,12 +1,14 @@
 use crate::db::Account;
+use crate::quota_headers::{parse_codex_quota_headers, CodexQuotaWindowSnapshot};
 use chrono::Utc;
-use reqwest::Client;
+use reqwest::{header::HeaderMap, Client};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use std::fmt;
 use std::time::Duration;
 
 const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+pub(crate) const QUOTA_CACHE_KEY: &str = "aether:quota_cache";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitWindow {
@@ -23,10 +25,6 @@ pub struct RateLimitWindow {
     pub num_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub num_tokens_limit: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allowed_amount: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub used_amount: Option<f64>,
 }
 
 impl RateLimitWindow {
@@ -221,6 +219,75 @@ pub async fn query_usage(client: &Client, account: &Account) -> Result<QuotaUsag
     Ok(usage)
 }
 
+pub(crate) fn full_cache_entry_json(usage: &QuotaUsage) -> Result<String, serde_json::Error> {
+    let fetched_at = if usage.fetched_at > 0 {
+        usage.fetched_at
+    } else {
+        Utc::now().timestamp()
+    };
+    serde_json::to_string(&json!({
+        "quota": usage,
+        "cached_at": fetched_at.saturating_mul(1_000),
+    }))
+}
+
+/// Build a partial cache entry from Codex response headers. The DB layer deep
+/// merges this patch into the last complete `/wham/usage` snapshot, so fields
+/// such as additional limits and reset credits are never discarded.
+pub(crate) fn codex_header_cache_entry_json(
+    account: &Account,
+    headers: &HeaderMap,
+) -> Option<String> {
+    if account.account_type != "oauth" {
+        return None;
+    }
+    let snapshot = parse_codex_quota_headers(headers)?;
+    let mut rate_limit = Map::new();
+    if let Some(window) = snapshot.primary_window.as_ref() {
+        rate_limit.insert("primary_window".to_string(), window_value(window));
+    }
+    if let Some(window) = snapshot.secondary_window.as_ref() {
+        rate_limit.insert("secondary_window".to_string(), window_value(window));
+    }
+    if rate_limit.is_empty() {
+        return None;
+    }
+
+    let mut quota = Map::new();
+    if !account.chatgpt_user_id.is_empty() {
+        quota.insert("user_id".to_string(), json!(account.chatgpt_user_id));
+    }
+    if !account.chatgpt_account_id.is_empty() {
+        quota.insert("account_id".to_string(), json!(account.chatgpt_account_id));
+    }
+    if !account.email.is_empty() {
+        quota.insert("email".to_string(), json!(account.email));
+    }
+    if !account.plan_type.is_empty() {
+        quota.insert("plan_type".to_string(), json!(account.plan_type));
+    }
+    quota.insert("rate_limit".to_string(), Value::Object(rate_limit));
+    quota.insert("fetched_at".to_string(), json!(snapshot.fetched_at));
+    // Keep this private diagnostic available to future schedulers without
+    // changing the public AccountQuota shape consumed by the UI.
+    if let Some(value) = snapshot.primary_over_secondary_limit_percent {
+        quota.insert(
+            "codex_primary_over_secondary_limit_percent".to_string(),
+            json!(value),
+        );
+    }
+
+    serde_json::to_string(&json!({
+        "quota": Value::Object(quota),
+        "cached_at": snapshot.fetched_at.saturating_mul(1_000),
+    }))
+    .ok()
+}
+
+fn window_value(window: &CodexQuotaWindowSnapshot) -> Value {
+    serde_json::to_value(window).unwrap_or_else(|_| Value::Object(Map::new()))
+}
+
 fn parse_usage_response(body: &[u8]) -> Result<QuotaUsage, String> {
     let root =
         serde_json::from_slice::<Value>(body).map_err(|error| format!("JSON 无效: {error}"))?;
@@ -245,6 +312,37 @@ fn response_preview(body: &[u8], access_token: &str) -> String {
 mod tests {
     use super::*;
 
+    fn oauth_account() -> Account {
+        Account {
+            id: "local-account".to_string(),
+            name: "OAuth".to_string(),
+            account_type: "oauth".to_string(),
+            api_key: String::new(),
+            access_token: String::new(),
+            refresh_token: String::new(),
+            refreshable: false,
+            id_token: String::new(),
+            client_id: String::new(),
+            credential_masked: String::new(),
+            base_url: String::new(),
+            chatgpt_account_id: "chatgpt-account".to_string(),
+            chatgpt_user_id: "chatgpt-user".to_string(),
+            email: "user@example.com".to_string(),
+            plan_type: "plus".to_string(),
+            expires_at: None,
+            priority: 0,
+            models: Vec::new(),
+            weight: 1,
+            concurrency: 10,
+            status: "active".to_string(),
+            last_error: String::new(),
+            last_used_at: None,
+            request_count: 0,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
     #[test]
     fn calculates_remaining_percent_and_reset_time() {
         let mut window = RateLimitWindow {
@@ -257,8 +355,6 @@ mod tests {
             num_requests_limit: None,
             num_tokens: None,
             num_tokens_limit: None,
-            allowed_amount: None,
-            used_amount: None,
         };
         window.normalize(1_000);
         assert_eq!(window.remaining_percent, Some(62.5));
@@ -314,5 +410,31 @@ mod tests {
         assert_eq!(usage.user_id, "");
         assert_eq!(usage.email, "");
         assert_eq!(usage.plan_type, "team");
+    }
+
+    #[test]
+    fn builds_partial_cache_entry_from_codex_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-codex-primary-used-percent", "80".parse().unwrap());
+        headers.insert("x-codex-primary-window-minutes", "10080".parse().unwrap());
+        headers.insert(
+            "x-codex-primary-reset-after-seconds",
+            "3600".parse().unwrap(),
+        );
+        let entry = codex_header_cache_entry_json(&oauth_account(), &headers).unwrap();
+        let entry: Value = serde_json::from_str(&entry).unwrap();
+        assert_eq!(
+            entry.pointer("/quota/account_id"),
+            Some(&json!("chatgpt-account"))
+        );
+        assert_eq!(
+            entry.pointer("/quota/rate_limit/primary_window/remaining_percent"),
+            Some(&json!(20.0))
+        );
+        assert_eq!(
+            entry.pointer("/quota/rate_limit/primary_window/limit_window_seconds"),
+            Some(&json!(604_800))
+        );
+        assert!(entry.pointer("/quota/additional_rate_limits").is_none());
     }
 }

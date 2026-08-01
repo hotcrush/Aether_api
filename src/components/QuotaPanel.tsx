@@ -1,4 +1,5 @@
 import { AlertCircle, Gauge, RefreshCw } from 'lucide-react'
+import { formatDateTime, formatShortTime, parseDate } from '../lib/time'
 import type { AccountQuota, QuotaQueryState, QuotaWindow } from '../types'
 
 interface QuotaPanelProps {
@@ -62,7 +63,7 @@ export function QuotaPanel({
         <button
           className="quota-refresh"
           onClick={onQuery}
-          data-tooltip={`刷新用量，上次查询 ${formatLocalTime(state.quota.fetched_at)}`}
+          data-tooltip={`刷新用量，上次查询 ${formatShortTime(state.quota.fetched_at)}`}
           aria-label="刷新用量"
         >
           <RefreshCw size={12} />
@@ -107,12 +108,6 @@ function UsageWindow({
         {w.num_tokens != null && (
           <span className="uw-badge">{formatTokenCount(w.num_tokens)}</span>
         )}
-        {w.allowed_amount != null && (
-          <span className="uw-badge uw-badge-allowed">A ${w.allowed_amount.toFixed(2)}</span>
-        )}
-        {w.used_amount != null && (
-          <span className="uw-badge uw-badge-used">U ${w.used_amount.toFixed(2)}</span>
-        )}
       </div>
       <div className="usage-window-bar">
         <span className={`usage-window-label ${entry.label === '5h' ? 'short' : 'long'}`}>
@@ -141,7 +136,7 @@ interface QuotaWindowEntry {
 function primaryWindows(quota: AccountQuota): QuotaWindowEntry[] {
   const main = extractWindows(quota.rate_limit)
   if (main.length) return main
-  for (const additional of quota.additional_rate_limits) {
+  for (const additional of quota.additional_rate_limits ?? []) {
     const windows = extractWindows(additional.rate_limit)
     if (windows.length) return windows
   }
@@ -164,13 +159,13 @@ function extractWindows(value: unknown): QuotaWindowEntry[] {
         .map((entry, index) => ({ ...entry, label: index === 0 ? '5h' : '7d' }))
     }
     return withDurations
-      .map((entry) => ({ ...entry, label: entry.slot === 'primary' ? '5h' : '7d' } as QuotaWindowEntry))
+      .map((entry) => ({ ...entry, label: entry.slot === 'primary' ? '7d' : '5h' } as QuotaWindowEntry))
       .sort((left, right) => left.label === '5h' ? -1 : right.label === '5h' ? 1 : 0)
   }
 
   return windows.map((entry) => ({
     ...entry,
-    label: (windowSeconds(entry.window) ?? (entry.slot === 'primary' ? 18_000 : 604_800)) <= 21_600
+    label: (windowSeconds(entry.window) ?? (entry.slot === 'primary' ? 604_800 : 18_000)) <= 21_600
       ? '5h'
       : '7d',
   }))
@@ -233,13 +228,7 @@ function formatResetCountdown(window: QuotaWindow, fetchedAt: number | string) {
 function formatResetTime(window: QuotaWindow, fetchedAt: number | string) {
   const date = resetDate(window, fetchedAt)
   if (!date) return null
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
+  return formatDateTime(date.getTime())
 }
 
 function resetDate(window: QuotaWindow, fetchedAt: number | string) {
@@ -249,25 +238,6 @@ function resetDate(window: QuotaWindow, fetchedAt: number | string) {
   return resetAt ?? (resetAfter === null || !fetchedDate
     ? null
     : new Date(fetchedDate.getTime() + Math.max(0, resetAfter) * 1000))
-}
-
-function formatLocalTime(value: number | string) {
-  const date = parseDate(value)
-  if (!date) return '未知'
-  return date.toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
-}
-
-function parseDate(value: number | string | null | undefined): Date | null {
-  if (value === null || value === undefined) return null
-  const numeric = typeof value === 'number' ? value : Number(value)
-  const date = Number.isFinite(numeric)
-    ? new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric)
-    : new Date(value)
-  return Number.isNaN(date.getTime()) ? null : date
 }
 
 function formatCompact(n: number): string {

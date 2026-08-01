@@ -16,8 +16,10 @@ interface ProxyPanelProps {
   accounts: Account[]
   quotaStates: Record<string, QuotaQueryState>
   relayUsageStates: Record<string, RelayUsageQueryState>
+  dailyBudgetUsd: number | null
   resetBusy: boolean
   onResetCounts: () => void
+  onEditDailyBudget: () => void
 }
 
 export function ProxyPanel({
@@ -27,11 +29,14 @@ export function ProxyPanel({
   accounts,
   quotaStates,
   relayUsageStates,
+  dailyBudgetUsd,
   resetBusy,
   onResetCounts,
+  onEditDailyBudget,
 }: ProxyPanelProps) {
   const totalRequests = proxy?.total_requests ?? 0
   const totalCost = proxy?.total_cost ?? 0
+  const todayCost = proxy?.today_cost ?? 0
   const totalTokens = proxy?.total_tokens ?? 0
   const inputTokens = proxy?.input_tokens ?? 0
   const outputTokens = proxy?.output_tokens ?? 0
@@ -57,16 +62,23 @@ export function ProxyPanel({
     ? `按响应返回的模型及输入、输出、缓存 Token 价格估算；另有 ${unpricedTokens.toLocaleString()} Token 因模型价格未知未计入。${pricingMeta}`
     : `按响应返回的模型及输入、输出、缓存 Token 价格估算，可能与上游最终账单存在差异。${pricingMeta}`
   const quotaSummary = summarizeQuota(accounts, quotaStates, relayUsageStates)
-  const quotaDisplay = quotaSummaryDisplay(quotaSummary)
+  const quotaDisplay = dailyBudgetDisplay(dailyBudgetUsd, todayCost, quotaSummary)
 
   return (
     <section className="proxy-panel" aria-label="本地代理">
       <div className="proxy-overview">
         <div className="proxy-heading">
-          <div className="proxy-title"><Server size={18} />本地代理</div>
+          <div className="proxy-title">
+            <Server size={18} />
+            本地代理
+            {proxy && (
+              <span className={`proxy-profile ${proxy.proxy_profile}`}>
+                {proxyProfileLabel} · {proxy.port}
+              </span>
+            )}
+          </div>
           <div className="proxy-subtitle">
             {proxy?.active_account_count ?? activeAccountCount} 个启用，共 {proxy?.account_count ?? accountCount} 个上游
-            {proxy && <span className={`proxy-profile ${proxy.proxy_profile}`}>{proxyProfileLabel} · {proxy.port}</span>}
           </div>
         </div>
         <div className="proxy-stats">
@@ -97,14 +109,20 @@ export function ProxyPanel({
                 : '基于模型 Token 用量'}
             </span>
           </div>
-          <div className="stat-item stat-quota" data-tooltip={quotaDisplay.title}>
-            <span className="stat-label stat-tooltip">剩余 / 总额度</span>
+          <button
+            type="button"
+            className="stat-item stat-quota stat-quota-button"
+            onClick={onEditDailyBudget}
+            data-tooltip={quotaDisplay.title}
+            aria-label="设置每日 USD 额度"
+          >
+            <span className="stat-label stat-tooltip">每日剩余 / 总额度</span>
             <span className="stat-value">{quotaDisplay.value}</span>
             <span className="stat-detail stat-support">{quotaDisplay.detail}</span>
             {quotaDisplay.secondary && (
               <span className="stat-detail quota-secondary">{quotaDisplay.secondary}</span>
             )}
-          </div>
+          </button>
           <button
             className="stat-reset"
             onClick={onResetCounts}
@@ -124,14 +142,8 @@ interface QuotaAggregate {
   oauthEligible: number
   oauthKnown: number
   oauthShortRemaining: number
-  oauthShortAmountKnown: number
-  oauthShortRemainingAmount: number
-  oauthShortTotalAmount: number
   oauthLongKnown: number
   oauthLongRemaining: number
-  oauthLongAmountKnown: number
-  oauthLongRemainingAmount: number
-  oauthLongTotalAmount: number
   relayEligible: number
   relayKnown: number
   relayRemaining: number
@@ -147,14 +159,8 @@ function summarizeQuota(
     oauthEligible: 0,
     oauthKnown: 0,
     oauthShortRemaining: 0,
-    oauthShortAmountKnown: 0,
-    oauthShortRemainingAmount: 0,
-    oauthShortTotalAmount: 0,
     oauthLongKnown: 0,
     oauthLongRemaining: 0,
-    oauthLongAmountKnown: 0,
-    oauthLongRemainingAmount: 0,
-    oauthLongTotalAmount: 0,
     relayEligible: 0,
     relayKnown: 0,
     relayRemaining: 0,
@@ -173,22 +179,10 @@ function summarizeQuota(
         summary.oauthKnown += 1
         summary.oauthShortRemaining += shortRemaining / 100
       }
-      const shortAmount = quotaAmount(shortWindow)
-      if (shortAmount) {
-        summary.oauthShortAmountKnown += 1
-        summary.oauthShortRemainingAmount += shortAmount.remaining
-        summary.oauthShortTotalAmount += shortAmount.total
-      }
       const longRemaining = remainingPercent(longWindow)
       if (longRemaining !== null) {
         summary.oauthLongKnown += 1
         summary.oauthLongRemaining += longRemaining / 100
-      }
-      const longAmount = quotaAmount(longWindow)
-      if (longAmount) {
-        summary.oauthLongAmountKnown += 1
-        summary.oauthLongRemainingAmount += longAmount.remaining
-        summary.oauthLongTotalAmount += longAmount.total
       }
       continue
     }
@@ -207,70 +201,69 @@ function summarizeQuota(
   return summary
 }
 
-function quotaSummaryDisplay(summary: QuotaAggregate) {
+function dailyBudgetDisplay(
+  dailyBudgetUsd: number | null,
+  todayCost: number,
+  summary: QuotaAggregate,
+) {
   const relayValue = summary.relayKnown > 0
     ? `${formatUsd(summary.relayRemaining)} / ${formatUsd(summary.relayTotal)}`
     : null
-  if (summary.oauthShortAmountKnown > 0) {
-    const shortValue = `${formatUsd(summary.oauthShortRemainingAmount)} / ${formatUsd(summary.oauthShortTotalAmount)}`
-    const longDescription = summary.oauthLongAmountKnown > 0
-      ? `7d ${formatUsd(summary.oauthLongRemainingAmount)} / ${formatUsd(summary.oauthLongTotalAmount)}`
-      : '7d 暂无金额数据'
+  const oauthValue = summary.oauthKnown > 0
+    ? `${formatQuotaUnits(summary.oauthShortRemaining)} / ${summary.oauthKnown} 等效 · ${summary.oauthKnown}/${summary.oauthEligible} 已查`
+    : summary.oauthEligible > 0 ? `OAuth 5h 待查询 · 0/${summary.oauthEligible}` : null
+  const secondary = oauthValue ? `OAuth 5h ${oauthValue}` : relayValue ? `中转 ${relayValue}` : null
+  const longDescription = summary.oauthLongKnown > 0
+    ? `OAuth 7d 剩余等效 ${formatQuotaUnits(summary.oauthLongRemaining)} / ${summary.oauthLongKnown}`
+    : 'OAuth 7d 暂无数据'
+
+  if (dailyBudgetUsd !== null && dailyBudgetUsd > 0) {
+    const remaining = Math.max(0, dailyBudgetUsd - todayCost)
     return {
-      value: shortValue,
-      detail: `OAuth 5h 金额 · ${summary.oauthShortAmountKnown}/${summary.oauthEligible} 已查`,
-      secondary: relayValue ? `中转 ${relayValue}` : null,
-      title: `OAuth 5h 剩余金额 ${shortValue}；${longDescription}。金额按上游返回的 allowed_amount 与 used_amount 汇总。${relayValue ? `中转站剩余 ${relayValue}。` : ''}`,
+      value: `${formatUsd(remaining)} / ${formatUsd(dailyBudgetUsd)}`,
+      detail: `今日已用 ${formatUsd(todayCost)}`,
+      secondary,
+      title: `每日 USD 额度按本地时间统计，今日已用 ${formatUsd(todayCost)}，剩余 ${formatUsd(remaining)}。${longDescription}。点击修改每日额度。`,
     }
   }
-  if (summary.oauthKnown > 0) {
-    const shortValue = `${formatQuotaUnits(summary.oauthShortRemaining)} / ${summary.oauthKnown}`
-    const longDescription = summary.oauthLongKnown > 0
-      ? `7d ${formatQuotaUnits(summary.oauthLongRemaining)} / ${summary.oauthLongKnown}`
-      : '7d 暂无数据'
-    return {
-      value: shortValue,
-      detail: `OAuth 5h 等效 · ${summary.oauthKnown}/${summary.oauthEligible} 已查`,
-      secondary: relayValue ? `中转 ${relayValue}` : null,
-      title: `OAuth 5h 剩余等效 ${shortValue} 个满额账号；${longDescription}。不同套餐仅按剩余百分比归一化，不代表相同 Token 数量。${relayValue ? `中转站剩余 ${relayValue}。` : ''}`,
-    }
-  }
-  if (relayValue) {
-    return {
-      value: relayValue,
-      detail: `中转站金额额度 · ${summary.relayKnown}/${summary.relayEligible} 已查`,
-      secondary: null,
-      title: `已汇总 ${summary.relayKnown} 个返回明确金额上限的中转站。`,
-    }
-  }
-  const eligible = summary.oauthEligible + summary.relayEligible
+
   return {
-    value: '-- / --',
-    detail: eligible > 0 ? '查询全部用量后汇总' : '暂无启用渠道',
-    secondary: null,
-    title: 'OAuth 按剩余百分比折算为等效满额账号；中转站仅汇总返回明确金额上限的渠道。',
+    value: '$-- / $--',
+    detail: '点击设置每日 USD 额度',
+    secondary,
+    title: `设置每日 USD 总额度后，将使用当天请求的实际估算费用计算剩余金额。${longDescription}。`,
   }
 }
 
 function quotaWindows(quota: AccountQuota): [QuotaWindow | null, QuotaWindow | null] {
-  const limits = [quota.rate_limit, ...quota.additional_rate_limits.map((item) => item.rate_limit)]
+  const limits = [
+    quota.rate_limit,
+    ...(quota.additional_rate_limits ?? []).map((item) => item.rate_limit),
+  ]
   for (const limit of limits) {
     const windows = rateLimitWindows(limit)
     if (!windows.length) continue
-    const ordered = windows.sort((left, right) => windowDuration(left) - windowDuration(right))
-    return [ordered[0] ?? null, ordered[1] ?? null]
+    const ordered = windows.sort((left, right) => left.duration - right.duration)
+    return [ordered[0]?.window ?? null, ordered[1]?.window ?? null]
   }
   return [null, null]
 }
 
 function rateLimitWindows(limit: QuotaRateLimit | null | undefined) {
-  return [limit?.primary_window, limit?.secondary_window]
-    .filter((window): window is QuotaWindow => Boolean(window))
+  return [
+    { window: limit?.primary_window, fallbackDuration: 604_800 },
+    { window: limit?.secondary_window, fallbackDuration: 18_000 },
+  ]
+    .filter((entry): entry is { window: QuotaWindow; fallbackDuration: number } => Boolean(entry.window))
+    .map((entry) => ({
+      window: entry.window,
+      duration: windowDuration(entry.window) ?? entry.fallbackDuration,
+    }))
 }
 
 function windowDuration(window: QuotaWindow) {
   const seconds = finiteNumber(window.limit_window_seconds)
-  return seconds !== null && seconds > 0 ? seconds : Number.MAX_SAFE_INTEGER
+  return seconds !== null && seconds > 0 ? seconds : null
 }
 
 function remainingPercent(window: QuotaWindow | null) {
@@ -279,19 +272,6 @@ function remainingPercent(window: QuotaWindow | null) {
   if (remaining !== null) return clampPercent(remaining)
   const used = finiteNumber(window.used_percent)
   return used === null ? null : clampPercent(100 - used)
-}
-
-function quotaAmount(window: QuotaWindow | null) {
-  if (!window) return null
-  const total = finiteNumber(window.allowed_amount)
-  if (total === null || total <= 0) return null
-  const used = finiteNumber(window.used_amount)
-  const percent = remainingPercent(window)
-  if (used === null && percent === null) return null
-  return {
-    total,
-    remaining: Math.min(total, Math.max(0, used === null ? total * percent! / 100 : total - used)),
-  }
 }
 
 function finiteNumber(value: number | null | undefined) {

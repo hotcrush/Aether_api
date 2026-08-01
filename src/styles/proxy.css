@@ -129,7 +129,7 @@
   display: grid;
   min-width: 0;
   min-height: 68px;
-  align-content: start;
+  align-content: center;
   gap: 2px;
   padding: 1px clamp(14px, 1.8vw, 24px) 0;
   border-left: 1px solid var(--border);
@@ -137,7 +137,6 @@
 
 .proxy-profile {
   display: inline-flex;
-  margin-left: 8px;
   padding: 1px 6px;
   border-radius: 999px;
   background: var(--primary-soft);
@@ -167,6 +166,28 @@
   color: var(--primary);
   font-size: clamp(16px, 1.45vw, 19px);
   white-space: nowrap;
+}
+
+.stat-quota-button {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stat-quota-button:hover {
+  background: color-mix(in srgb, var(--primary-soft) 46%, transparent);
+}
+
+.stat-quota-button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 
 .quota-secondary {

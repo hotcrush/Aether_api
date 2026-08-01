@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { Activity, ScrollText, Server, Terminal } from 'lucide-react'
+import { listen } from '@tauri-apps/api/event'
 import { AccountTable } from './components/AccountTable'
 import { AccountToolbar } from './components/AccountToolbar'
 import { ApiKeyDialog } from './components/ApiKeyDialog'
@@ -9,14 +9,18 @@ import { ClipboardImportDialog } from './components/ClipboardImportDialog'
 import { CodexSettingsPanel } from './components/CodexSettingsPanel'
 import { ChannelMonitorPanel } from './components/ChannelMonitorPanel'
 import { DeleteAccountDialog } from './components/DeleteAccountDialog'
+import { DailyBudgetDialog } from './components/DailyBudgetDialog'
 import { ImportDialog } from './components/ImportDialog'
 import { LoggerPage } from './components/LoggerPage'
+import { MarketMonitorPage, type MarketSection } from './components/MarketMonitorPage'
 import { PageImportDropZone } from './components/PageImportDropZone'
 import { ProxyPanel } from './components/ProxyPanel'
 import { ResetAccessKeyDialog } from './components/ResetAccessKeyDialog'
 import { ToastStack } from './components/ToastStack'
 import { TooltipProvider } from './components/TooltipProvider'
 import { TrashDialog } from './components/TrashDialog'
+import { WorkspaceTabBar } from './components/WorkspaceTabBar'
+import { WebWorkspaceView } from './components/WebWorkspaceView'
 import {
   deleteAccount as deleteAccountCommand,
   discardClipboardImport,
@@ -44,7 +48,14 @@ import {
   testAccount,
 } from './lib/commands'
 import { getChannelMonitorSnapshot, probeChannel } from './lib/channelMonitor'
+import { loadDailyBudget, saveDailyBudget } from './lib/dailyBudget'
 import { errorText } from './lib/format'
+import {
+  getMarketSnapshot,
+  listenMarketSnapshot,
+  markMarketAlertsRead,
+  type MarketEvent,
+} from './lib/market'
 import {
   loadQuotaCache,
   removeQuotaFromCache,
@@ -64,8 +75,27 @@ import {
   saveQuotaRefreshSettings,
   type QuotaRefreshInterval,
 } from './lib/quotaRefreshSettings'
+import {
+  listenWebviewActivity,
+  listenWebviewImportCandidate,
+  listenWebviewOpenRequested,
+} from './lib/webviewTabs'
+import {
+  activateWorkspaceTab,
+  activateWorkspaceTabAt,
+  activeWorkspaceTab as getActiveWorkspaceTab,
+  closeWorkspaceTab,
+  cycleWorkspaceTab,
+  hideInternalWorkspaceTab,
+  loadWorkspaceTabState,
+  moveWorkspaceTab,
+  openInternalWorkspaceTab,
+  openWebWorkspaceTab,
+  saveWorkspaceTabState,
+} from './lib/workspaceTabs'
 import type {
   Account,
+  AccountQuota,
   AccountQuotaResult,
   AccountStatus,
   AccountTypeFilter,
@@ -73,13 +103,25 @@ import type {
   CodexTakeoverStatus,
   ClipboardImportCandidate,
   ProxyInfo,
+  QuotaRateLimit,
   QuotaQueryState,
+  QuotaWindow,
   RelayUsageQueryState,
   ToastItem,
 } from './types'
 import type { ChannelMonitorSnapshot } from './monitorTypes'
 
 const USAGE_QUERY_CONCURRENCY = 3
+const MAX_CLIPBOARD_IMPORT_CANDIDATES = 16
+const WEBVIEW_COPY_SCAN_DELAY_MS = 100
+
+interface QuotaCacheUpdatedPayload {
+  account_id: string
+  entry?: {
+    quota?: Partial<AccountQuota>
+    cached_at?: number
+  }
+}
 
 function advanceRequestEpoch(epochs: Map<string, number>, accountId: string) {
   const next = (epochs.get(accountId) ?? 0) + 1
@@ -99,12 +141,17 @@ export default function App() {
   const [typeFilter, setTypeFilter] = useState<AccountTypeFilter>('all')
   const [importOpen, setImportOpen] = useState(false)
   const [importFiles, setImportFiles] = useState<File[]>([])
-  const [clipboardCandidate, setClipboardCandidate] = useState<ClipboardImportCandidate | null>(null)
+  const [clipboardCandidates, setClipboardCandidates] = useState<ClipboardImportCandidate[]>([])
   const [relayOpen, setRelayOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   const [resetKeyOpen, setResetKeyOpen] = useState(false)
   const [trashOpen, setTrashOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'upstreams' | 'codex' | 'monitor' | 'logs'>('upstreams')
+  const [dailyBudgetOpen, setDailyBudgetOpen] = useState(false)
+  const [dailyBudgetUsd, setDailyBudgetUsd] = useState<number | null>(null)
+  const [tabState, setTabState] = useState(loadWorkspaceTabState)
+  const [tabPickerOpen, setTabPickerOpen] = useState(false)
+  const [marketUnreadCount, setMarketUnreadCount] = useState(0)
+  const [marketSection, setMarketSection] = useState<MarketSection>('products')
   const [busyActions, setBusyActions] = useState<Set<string>>(() => new Set())
   const [quotaStates, setQuotaStates] = useState<Record<string, QuotaQueryState>>({})
   const [relayUsageStates, setRelayUsageStates] = useState<Record<string, RelayUsageQueryState>>({})
@@ -129,8 +176,22 @@ export default function App() {
   const relayRequestEpochs = useRef(new Map<string, number>())
   const quotaQueryInFlight = useRef(false)
   const clipboardScanBusy = useRef(false)
-  const dialogOpenRef = useRef(false)
+  const clipboardScanPending = useRef(false)
+  const clipboardCandidateIds = useRef(new Set<string>())
+  const clipboardImportBusyId = useRef<string | null>(null)
   const monitorLoadInFlight = useRef(false)
+  const currentWorkspaceTab = getActiveWorkspaceTab(tabState)
+  const activeTab = currentWorkspaceTab.kind === 'internal' ? currentWorkspaceTab.page : null
+  const blockingDialogOpen = Boolean(
+    importOpen || relayOpen || deleteTarget || resetKeyOpen || dailyBudgetOpen || trashOpen,
+  )
+  const queuedClipboardCandidate = clipboardCandidates[0] ?? null
+  const clipboardCandidate = blockingDialogOpen || tabPickerOpen
+    ? null
+    : queuedClipboardCandidate
+  const webviewOverlayOpen = tabPickerOpen
+    || blockingDialogOpen
+    || queuedClipboardCandidate !== null
 
   const notify = useCallback((message: string, error = false) => {
     const id = ++toastId.current
@@ -139,6 +200,78 @@ export default function App() {
       () => setToasts((current) => current.filter((item) => item.id !== id)),
       3500,
     )
+  }, [])
+  const notifyWebviewError = useCallback((message: string) => {
+    notify(message, true)
+  }, [notify])
+  const openExternalWebTab = useCallback((url: string, title?: string) => {
+    const parsed = parseHttpUrl(url)
+    if (!parsed) return
+    setTabState((current) => openWebWorkspaceTab(current, {
+      url: parsed.href,
+      title: title?.trim() || parsed.hostname,
+      source: { kind: 'manual' },
+    }))
+  }, [])
+
+  useEffect(() => {
+    saveWorkspaceTabState(tabState)
+  }, [tabState])
+
+  useEffect(() => {
+    const onDocumentClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0) return
+      const target = event.target
+      if (!(target instanceof Element)) return
+
+      const anchor = target.closest<HTMLAnchorElement>('a[href]')
+      if (!anchor || anchor.hasAttribute('download')) return
+      const href = anchor.getAttribute('href')?.trim()
+      if (!href || !parseHttpUrl(href)) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      const title = anchor.getAttribute('title') || anchor.textContent?.trim()
+      openExternalWebTab(href, title || undefined)
+    }
+
+    document.addEventListener('click', onDocumentClick, true)
+    return () => document.removeEventListener('click', onDocumentClick, true)
+  }, [openExternalWebTab])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const commandKey = event.ctrlKey || event.metaKey
+      if (!commandKey || event.altKey || event.defaultPrevented) return
+
+      if (event.key === 'Tab' || event.key === 'PageDown' || event.key === 'PageUp') {
+        event.preventDefault()
+        const direction = event.shiftKey || event.key === 'PageUp' ? -1 : 1
+        setTabState((current) => cycleWorkspaceTab(current, direction))
+        return
+      }
+
+      const key = event.key.toLowerCase()
+      if (key === 't') {
+        event.preventDefault()
+        setTabPickerOpen(true)
+        return
+      }
+      if (key === 'w') {
+        event.preventDefault()
+        setTabState((current) => closeWorkspaceTab(current, current.activeTabId))
+        return
+      }
+      if (/^[1-9]$/.test(key)) {
+        event.preventDefault()
+        setTabState((current) => activateWorkspaceTabAt(
+          current,
+          key === '9' ? current.tabs.length - 1 : Number(key) - 1,
+        ))
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
   const loadProxy = useCallback(async () => {
@@ -249,11 +382,50 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false
+    let stopListening: (() => void) | undefined
+    void listen<QuotaCacheUpdatedPayload>('quota-cache-updated', ({ payload }) => {
+      const patch = payload.entry?.quota
+      if (!patch || !payload.account_id) return
+      setQuotaStates((current) => {
+        const existing = current[payload.account_id]
+        if (existing?.status === 'loading') return current
+        const existingQuota = existing?.status === 'success' ? existing.quota : undefined
+        if (quotaFetchedAt(existingQuota) > quotaFetchedAt(patch)) return current
+        return {
+          ...current,
+          [payload.account_id]: {
+            status: 'success',
+            quota: mergeQuotaSnapshot(existingQuota, patch),
+          },
+        }
+      })
+    })
+      .then((unlisten) => {
+        if (disposed) unlisten()
+        else stopListening = unlisten
+      })
+      .catch(() => undefined)
+    return () => {
+      disposed = true
+      stopListening?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    let disposed = false
     void loadQuotaRefreshSettings().then((settings) => {
       if (disposed) return
       setQuotaAutoRefreshEnabled(settings.enabled)
       setQuotaAutoRefreshInterval(settings.intervalMinutes)
       setQuotaRefreshSettingsHydrated(true)
+    })
+    return () => { disposed = true }
+  }, [])
+
+  useEffect(() => {
+    let disposed = false
+    void loadDailyBudget().then((limit) => {
+      if (!disposed) setDailyBudgetUsd(limit)
     })
     return () => { disposed = true }
   }, [])
@@ -266,24 +438,92 @@ export default function App() {
     })
   }, [quotaAutoRefreshEnabled, quotaAutoRefreshInterval, quotaRefreshSettingsHydrated])
 
-  useEffect(() => {
-    dialogOpenRef.current = Boolean(
-      importOpen || relayOpen || deleteTarget || resetKeyOpen || clipboardCandidate,
-    )
-  }, [importOpen, relayOpen, deleteTarget, resetKeyOpen, clipboardCandidate])
+  const enqueueClipboardCandidate = useCallback((candidate: ClipboardImportCandidate) => {
+    const candidateId = candidate.candidate_id.trim()
+    if (!candidateId || clipboardCandidateIds.current.has(candidateId)) return
+    if (clipboardCandidateIds.current.size >= MAX_CLIPBOARD_IMPORT_CANDIDATES) {
+      void discardClipboardImport(candidateId).catch(() => undefined)
+      return
+    }
+    clipboardCandidateIds.current.add(candidateId)
+    setClipboardCandidates((current) => {
+      return [...current, candidate]
+    })
+  }, [])
+
+  const removeClipboardCandidate = useCallback((candidateId: string) => {
+    clipboardCandidateIds.current.delete(candidateId)
+    setClipboardCandidates((current) => (
+      current.some((candidate) => candidate.candidate_id === candidateId)
+        ? current.filter((candidate) => candidate.candidate_id !== candidateId)
+        : current
+    ))
+  }, [])
 
   const scanClipboard = useCallback(async () => {
-    if (clipboardScanBusy.current || dialogOpenRef.current) return
+    if (clipboardScanBusy.current) {
+      clipboardScanPending.current = true
+      return
+    }
     clipboardScanBusy.current = true
     try {
-      const candidate = await inspectClipboardImport()
-      if (candidate) setClipboardCandidate(candidate)
-    } catch {
-      // Clipboard access and unrelated contents are intentionally silent.
+      do {
+        clipboardScanPending.current = false
+        try {
+          const candidate = await inspectClipboardImport()
+          if (candidate) enqueueClipboardCandidate(candidate)
+        } catch {
+          // Clipboard access and unrelated contents are intentionally silent.
+        }
+      } while (clipboardScanPending.current)
     } finally {
       clipboardScanBusy.current = false
     }
-  }, [])
+  }, [enqueueClipboardCandidate])
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+
+    let disposed = false
+    let stopActivity: (() => void) | undefined
+    let stopImportCandidate: (() => void) | undefined
+    let stopOpenRequested: (() => void) | undefined
+    let copyScanTimer: number | undefined
+
+    void listenWebviewActivity((activity) => {
+      if (disposed || activity.kind !== 'copy' || activity.phase !== 'occurred') return
+      if (copyScanTimer !== undefined) window.clearTimeout(copyScanTimer)
+      copyScanTimer = window.setTimeout(() => {
+        copyScanTimer = undefined
+        if (!disposed) void scanClipboard()
+      }, WEBVIEW_COPY_SCAN_DELAY_MS)
+    }).then((unlisten) => {
+      if (disposed) unlisten()
+      else stopActivity = unlisten
+    }).catch(() => undefined)
+
+    void listenWebviewImportCandidate((candidate) => {
+      if (!disposed) enqueueClipboardCandidate(candidate)
+    }).then((unlisten) => {
+      if (disposed) unlisten()
+      else stopImportCandidate = unlisten
+    }).catch(() => undefined)
+
+    void listenWebviewOpenRequested((request) => {
+      if (!disposed) openExternalWebTab(request.url, request.title)
+    }).then((unlisten) => {
+      if (disposed) unlisten()
+      else stopOpenRequested = unlisten
+    }).catch(() => undefined)
+
+    return () => {
+      disposed = true
+      if (copyScanTimer !== undefined) window.clearTimeout(copyScanTimer)
+      stopActivity?.()
+      stopImportCandidate?.()
+      stopOpenRequested?.()
+    }
+  }, [enqueueClipboardCandidate, openExternalWebTab, scanClipboard])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -352,6 +592,37 @@ export default function App() {
     }
   }, [activeTab, loadChannelMonitor])
 
+  useEffect(() => {
+    let disposed = false
+    let stop: (() => void) | undefined
+    let stopNotificationOpen: (() => void) | undefined
+    void getMarketSnapshot()
+      .then((snapshot) => {
+        if (!disposed) setMarketUnreadCount(snapshot.unreadAlertCount)
+      })
+      .catch(() => undefined)
+    void listenMarketSnapshot((snapshot) => {
+      if (!disposed) setMarketUnreadCount(snapshot.unreadAlertCount)
+    }).then((unlisten) => {
+      if (disposed) unlisten()
+      else stop = unlisten
+    }).catch(() => undefined)
+    void listen<MarketEvent>('market:notification-opened', ({ payload }) => {
+      if (disposed) return
+      if (isMarketSection(payload.section)) setMarketSection(payload.section)
+      setTabState((current) => openInternalWorkspaceTab(current, 'market'))
+      void markMarketAlertsRead([payload.eventId]).catch(() => undefined)
+    }).then((unlisten) => {
+      if (disposed) unlisten()
+      else stopNotificationOpen = unlisten
+    }).catch(() => undefined)
+    return () => {
+      disposed = true
+      stop?.()
+      stopNotificationOpen?.()
+    }
+  }, [])
+
   const visibleAccounts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     return accounts.filter((account) => {
@@ -417,28 +688,45 @@ export default function App() {
   const closeClipboardImport = useCallback(() => {
     if (!clipboardCandidate) return
     const candidateId = clipboardCandidate.candidate_id
-    setClipboardCandidate(null)
-    void discardClipboardImport(candidateId).catch(() => undefined)
-  }, [clipboardCandidate])
+    if (clipboardImportBusyId.current === candidateId
+      || !clipboardCandidateIds.current.has(candidateId)) return
+    removeClipboardCandidate(candidateId)
+    void discardClipboardImport(candidateId).catch(() => {
+      enqueueClipboardCandidate(clipboardCandidate)
+    })
+  }, [clipboardCandidate, enqueueClipboardCandidate, removeClipboardCandidate])
 
   const importClipboardCandidate = async () => {
     if (!clipboardCandidate) return
-    setActionBusy('clipboard-import', true)
+    const candidate = clipboardCandidate
+    if (clipboardImportBusyId.current !== null
+      || !clipboardCandidateIds.current.has(candidate.candidate_id)) return
+    const actionKey = `clipboard-import:${candidate.candidate_id}`
+    clipboardImportBusyId.current = candidate.candidate_id
+    setActionBusy(actionKey, true)
+    let confirmed = false
     try {
-      const result = await confirmClipboardImport(clipboardCandidate.candidate_id)
+      const result = await confirmClipboardImport(candidate.candidate_id)
+      confirmed = true
       if (result.created || result.updated) await refreshData()
-      setClipboardCandidate(null)
       const summary = `新增 ${result.created}，更新 ${result.updated}`
+      const sourceLabel = candidate.detected_from === 'download' ? '下载文件' : '剪贴板'
       if (result.failed) {
         const detail = result.errors[0]?.message
-        notify(`${summary}，失败 ${result.failed}${detail ? `：${detail}` : ''}`, true)
+        notify(`${sourceLabel}导入：${summary}，失败 ${result.failed}${detail ? `：${detail}` : ''}`, true)
       } else {
-        notify(`剪贴板账号已导入：${summary}`)
+        notify(`${sourceLabel}账号已导入：${summary}`)
       }
     } catch (error) {
-      notify(errorText(error), true)
+      const message = errorText(error)
+      if (message.includes('自动导入候选已失效')) {
+        removeClipboardCandidate(candidate.candidate_id)
+      }
+      notify(message, true)
     } finally {
-      setActionBusy('clipboard-import', false)
+      if (confirmed) removeClipboardCandidate(candidate.candidate_id)
+      clipboardImportBusyId.current = null
+      setActionBusy(actionKey, false)
     }
   }
 
@@ -470,7 +758,13 @@ export default function App() {
     const actionKey = `open-relay:${account.id}`
     setActionBusy(actionKey, true)
     try {
-      await openRelaySite(account.id)
+      const url = await openRelaySite(account.id)
+      setTabState((current) => openWebWorkspaceTab(current, {
+        url,
+        title: account.name.trim() || account.email.trim() || '中转站',
+        reuseKey: `relay:${account.id}`,
+        source: { kind: 'relay', id: account.id },
+      }))
     } catch (error) {
       notify(errorText(error), true)
     } finally {
@@ -825,6 +1119,12 @@ export default function App() {
     }
   }
 
+  const updateDailyBudget = async (limitUsd: number | null) => {
+    await saveDailyBudget(limitUsd)
+    setDailyBudgetUsd(limitUsd)
+    notify(limitUsd === null ? '每日额度已清除' : `每日额度已设置为 $${limitUsd.toFixed(2)}`)
+  }
+
   const resetProxyAccessToken = async () => {
     setActionBusy('reset-access-token', true)
     try {
@@ -896,37 +1196,42 @@ export default function App() {
     <>
       <TooltipProvider />
       <AppHeader proxy={proxy} onSecretAction={() => setTrashOpen(true)} />
-      <nav className="tab-bar">
-        <button
-          className={`tab-item${activeTab === 'upstreams' ? ' active' : ''}`}
-          onClick={() => setActiveTab('upstreams')}
-        >
-          <Server size={14} />
-          上游管理
-        </button>
-        <button
-          className={`tab-item${activeTab === 'codex' ? ' active' : ''}`}
-          onClick={() => setActiveTab('codex')}
-        >
-          <Terminal size={14} />
-          Codex 配置
-        </button>
-        <button
-          className={`tab-item${activeTab === 'monitor' ? ' active' : ''}`}
-          onClick={() => setActiveTab('monitor')}
-        >
-          <Activity size={14} />
-          渠道监控
-        </button>
-        <button
-          className={`tab-item${activeTab === 'logs' ? ' active' : ''}`}
-          onClick={() => setActiveTab('logs')}
-        >
-          <ScrollText size={14} />
-          请求日志
-        </button>
-      </nav>
-      {activeTab === 'upstreams' ? (
+      <WorkspaceTabBar
+        tabs={tabState.tabs}
+        activeTabId={tabState.activeTabId}
+        badges={{ market: marketUnreadCount }}
+        pickerOpen={tabPickerOpen}
+        onPickerOpenChange={setTabPickerOpen}
+        onActivate={(tabId) => {
+          setTabState((current) => activateWorkspaceTab(current, tabId))
+        }}
+        onClose={(tabId) => {
+          setTabState((current) => closeWorkspaceTab(current, tabId))
+        }}
+        onHide={(tabId) => {
+          setTabState((current) => hideInternalWorkspaceTab(current, tabId))
+        }}
+        onOpenPage={(page) => {
+          setTabState((current) => openInternalWorkspaceTab(current, page))
+        }}
+        onMove={(sourceId, targetId, edge) => {
+          setTabState((current) => moveWorkspaceTab(current, sourceId, targetId, edge))
+        }}
+      />
+      <div
+        className="workspace-view"
+        id="workspace-panel"
+        role="tabpanel"
+        aria-labelledby={`workspace-tab-${currentWorkspaceTab.id}`}
+      >
+      <WebWorkspaceView
+        activeTab={!webviewOverlayOpen && currentWorkspaceTab.kind === 'web'
+          ? currentWorkspaceTab
+          : null}
+        tabs={tabState.tabs}
+        onError={notifyWebviewError}
+      />
+      {currentWorkspaceTab.kind === 'internal' && (activeTab === 'upstreams' ? (
       <main>
         <ProxyPanel
           proxy={proxy}
@@ -935,8 +1240,10 @@ export default function App() {
           accounts={accounts}
           quotaStates={quotaStates}
           relayUsageStates={relayUsageStates}
+          dailyBudgetUsd={dailyBudgetUsd}
           resetBusy={busyActions.has('reset-counts')}
           onResetCounts={resetCounts}
+          onEditDailyBudget={() => setDailyBudgetOpen(true)}
         />
         <PageImportDropZone onFiles={openImport} />
 
@@ -1004,6 +1311,15 @@ export default function App() {
       />
       ) : activeTab === 'logs' ? (
       <LoggerPage />
+      ) : activeTab === 'market' ? (
+      <MarketMonitorPage
+        initialSection={marketSection}
+        onSectionChange={setMarketSection}
+        onUnreadCountChange={setMarketUnreadCount}
+        onOpenWebPage={(input) => {
+          setTabState((current) => openWebWorkspaceTab(current, input))
+        }}
+      />
       ) : (
       <main className="monitor-page">
         <ChannelMonitorPanel
@@ -1016,7 +1332,8 @@ export default function App() {
           onProbe={(accountId) => { void runChannelProbe(accountId) }}
         />
       </main>
-      )}
+      ))}
+      </div>
 
       <ImportDialog
         open={importOpen}
@@ -1027,7 +1344,10 @@ export default function App() {
       />
       <ClipboardImportDialog
         candidate={clipboardCandidate}
-        busy={busyActions.has('clipboard-import')}
+        busy={Boolean(
+          clipboardCandidate
+          && busyActions.has(`clipboard-import:${clipboardCandidate.candidate_id}`),
+        )}
         onClose={closeClipboardImport}
         onConfirm={importClipboardCandidate}
       />
@@ -1048,6 +1368,13 @@ export default function App() {
         busy={busyActions.has('reset-access-token')}
         onClose={() => setResetKeyOpen(false)}
         onConfirm={resetProxyAccessToken}
+      />
+      <DailyBudgetDialog
+        open={dailyBudgetOpen}
+        limitUsd={dailyBudgetUsd}
+        todayCost={proxy?.today_cost ?? 0}
+        onClose={() => setDailyBudgetOpen(false)}
+        onSave={updateDailyBudget}
       />
       <TrashDialog
         open={trashOpen}
@@ -1085,6 +1412,66 @@ function findQuotaResult(results: AccountQuotaResult[], account: Account) {
   return results.find((result) => result.account_id === account.id)
 }
 
+function parseHttpUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url : null
+  } catch {
+    return null
+  }
+}
+
+function isMarketSection(value: string): value is MarketSection {
+  return value === 'products' || value === 'stores' || value === 'analytics' || value === 'alerts'
+}
+
+function mergeQuotaSnapshot(
+  current: AccountQuota | undefined,
+  patch: Partial<AccountQuota>,
+): AccountQuota {
+  return {
+    user_id: patch.user_id ?? current?.user_id ?? '',
+    account_id: patch.account_id ?? current?.account_id ?? '',
+    email: patch.email ?? current?.email ?? '',
+    plan_type: patch.plan_type ?? current?.plan_type ?? '',
+    rate_limit: mergeQuotaRateLimit(current?.rate_limit, patch.rate_limit),
+    additional_rate_limits: patch.additional_rate_limits ?? current?.additional_rate_limits ?? [],
+    rate_limit_reset_credits:
+      patch.rate_limit_reset_credits ?? current?.rate_limit_reset_credits ?? null,
+    fetched_at: patch.fetched_at ?? current?.fetched_at ?? Date.now(),
+  }
+}
+
+function mergeQuotaRateLimit(
+  current: QuotaRateLimit | null | undefined,
+  patch: QuotaRateLimit | null | undefined,
+): QuotaRateLimit | null {
+  if (!current && !patch) return null
+  return {
+    allowed: patch?.allowed ?? current?.allowed,
+    limit_reached: patch?.limit_reached ?? current?.limit_reached,
+    primary_window: mergeQuotaWindow(current?.primary_window, patch?.primary_window),
+    secondary_window: mergeQuotaWindow(current?.secondary_window, patch?.secondary_window),
+  }
+}
+
+function mergeQuotaWindow(
+  current: QuotaWindow | null | undefined,
+  patch: QuotaWindow | null | undefined,
+): QuotaWindow | null {
+  if (!current && !patch) return null
+  return { ...current, ...patch }
+}
+
+function quotaFetchedAt(quota: Partial<AccountQuota> | undefined) {
+  const raw = quota?.fetched_at
+  if (raw === null || raw === undefined) return 0
+  const numeric = typeof raw === 'number' ? raw : Number(raw)
+  if (Number.isFinite(numeric)) return numeric < 1_000_000_000_000 ? numeric * 1_000 : numeric
+  const timestamp = Date.parse(String(raw))
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
 function codexHistorySkipMessage(reason: string) {
   switch (reason) {
     case 'not_unified':
@@ -1118,6 +1505,7 @@ function sameProxyInfo(current: ProxyInfo | null, next: ProxyInfo) {
     && current.unpriced_tokens === next.unpriced_tokens
     && current.total_tokens === next.total_tokens
     && current.total_cost === next.total_cost
+    && current.today_cost === next.today_cost
     && current.pricing_updated_at === next.pricing_updated_at
     && current.pricing_source === next.pricing_source
     && sameNumberMap(current.account_capacities, next.account_capacities)

@@ -2,7 +2,7 @@ use super::AppState;
 use crate::db::Account;
 use crate::{oauth, quota, relay_usage};
 use futures::StreamExt;
-use tauri_plugin_shell::ShellExt;
+use tracing::warn;
 
 async fn account_for_quota(
     state: &tauri::State<'_, AppState>,
@@ -45,8 +45,8 @@ async fn query_quota_for_id(
     id: &str,
 ) -> Result<quota::QuotaUsage, String> {
     let account = account_for_quota(state, id).await?;
-    match quota::query_usage(&state.client, &account).await {
-        Ok(usage) => Ok(usage),
+    let usage = match quota::query_usage(&state.client, &account).await {
+        Ok(usage) => usage,
         Err(error) if error.status == Some(401) && !account.refresh_token.is_empty() => {
             let refreshed = oauth::refresh_account(&state.client, &account).await?;
             let refreshed = state
@@ -55,10 +55,26 @@ async fn query_quota_for_id(
                 .map_err(|db_error| format!("保存刷新结果失败: {db_error}"))?;
             quota::query_usage(&state.client, &refreshed)
                 .await
-                .map_err(|retry_error| retry_error.to_string())
+                .map_err(|retry_error| retry_error.to_string())?
         }
-        Err(error) => Err(error.to_string()),
+        Err(error) => return Err(error.to_string()),
+    };
+    match quota::full_cache_entry_json(&usage) {
+        Ok(entry) => {
+            if let Err(error) = state
+                .db
+                .set_json_setting_entries_async(
+                    quota::QUOTA_CACHE_KEY,
+                    vec![(id.to_string(), entry)],
+                )
+                .await
+            {
+                warn!(account_id = id, %error, "保存额度缓存失败");
+            }
+        }
+        Err(error) => warn!(account_id = id, %error, "序列化额度缓存失败"),
     }
+    Ok(usage)
 }
 
 #[tauri::command]
@@ -143,11 +159,7 @@ fn relay_site_url(base_url: &str) -> Result<reqwest::Url, String> {
 }
 
 #[tauri::command]
-pub(super) fn open_relay_site(
-    app: tauri::AppHandle,
-    state: tauri::State<AppState>,
-    id: String,
-) -> Result<(), String> {
+pub(super) fn open_relay_site(state: tauri::State<AppState>, id: String) -> Result<String, String> {
     let account = state
         .db
         .get_account(&id)
@@ -158,10 +170,7 @@ pub(super) fn open_relay_site(
     }
 
     let site_url = relay_site_url(&account.base_url)?;
-    #[allow(deprecated)]
-    app.shell()
-        .open(site_url.as_str(), None)
-        .map_err(|error| format!("无法打开中转站网页: {error}"))
+    Ok(site_url.to_string())
 }
 
 #[cfg(test)]

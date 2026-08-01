@@ -2,5 +2,6 @@ node_modules/
 .pnpm-store/
 dist/
 src-tauri/target/
+keys/
 *.log
 .DS_Store

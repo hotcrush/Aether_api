@@ -1,5 +1,5 @@
 import type { AccountQuota, QuotaQueryState } from '../types'
-import { getCache, setCache } from './commands'
+import { getCache, mergeCacheEntries, setCache } from './commands'
 
 const CACHE_KEY = 'aether:quota_cache'
 const FRESH_TTL_MS = 60 * 60 * 1000 // 1 hour
@@ -93,13 +93,16 @@ export function saveQuotaToCache(accountId: string, quota: AccountQuota) {
 export function saveQuotaBatchToCache(updates: readonly QuotaCacheUpdate[]) {
   if (!updates.length) return Promise.resolve()
   return enqueueMutation(async () => {
-    const cache = await readCache()
-    if (!cache) return
     const cachedAt = Date.now()
+    const entries: Record<string, CacheEntry> = {}
     for (const { accountId, quota } of updates) {
-      cache[accountId] = { quota, cached_at: cachedAt }
+      entries[accountId] = { quota, cached_at: cachedAt }
     }
-    await writeCache(cache)
+    try {
+      await mergeCacheEntries(CACHE_KEY, entries)
+    } catch {
+      // Keep the live result even when persistent storage is unavailable.
+    }
   })
 }
 

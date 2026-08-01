@@ -1,6 +1,14 @@
 export type AccountStatus = 'active' | 'disabled'
 export type AccountTypeFilter = 'all' | 'oauth' | 'api_key'
 
+export interface AppVersion {
+  version: string
+  commit: string
+  build_time: string
+  profile: string
+  tauri_version: string
+}
+
 export interface Account {
   id: string
   name: string
@@ -42,6 +50,7 @@ export interface ProxyInfo {
   unpriced_tokens: number
   total_tokens: number
   total_cost: number
+  today_cost: number
   pricing_updated_at: string
   pricing_source: string
   account_capacities: Record<string, number>
@@ -151,6 +160,8 @@ export interface ClipboardImportAccount {
 export interface ClipboardImportCandidate {
   candidate_id: string
   source: 'cpa' | 'sub2api'
+  detected_from?: 'clipboard' | 'download'
+  file_name?: string
   account_count: number
   accounts: ClipboardImportAccount[]
 }
@@ -171,8 +182,6 @@ export interface QuotaWindow {
   num_requests_limit?: number | null
   num_tokens?: number | null
   num_tokens_limit?: number | null
-  allowed_amount?: number | null
-  used_amount?: number | null
 }
 
 export interface QuotaRateLimit {
@@ -194,7 +203,7 @@ export interface AccountQuota {
   email: string
   plan_type: string
   rate_limit: QuotaRateLimit | null
-  additional_rate_limits: AdditionalRateLimit[]
+  additional_rate_limits?: AdditionalRateLimit[]
   fetched_at: number | string
   rate_limit_reset_credits?: {
     available_count?: number | null

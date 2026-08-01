@@ -1,4 +1,5 @@
 use super::*;
+use tauri::Emitter;
 
 pub(super) async fn enforce_content_length_limit(
     State(limit_state): State<BodyLimitMiddlewareState>,
@@ -82,6 +83,14 @@ pub(super) async fn proxy_handler(
             "authentication_error",
         );
     }
+    if !is_forwardable_responses_path(uri.path()) {
+        request_log.record_local_failure(StatusCode::NOT_FOUND, "unsupported responses subpath");
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "unsupported responses subpath",
+            "not_found_error",
+        );
+    }
 
     let accounts = match state.db.get_active_accounts_async().await {
         Ok(accounts) => accounts,
@@ -123,7 +132,14 @@ pub(super) async fn proxy_handler(
     }
 
     let route_key = request_route_key(&headers, &body);
-    let (accounts, retry_after) = state.ordered_accounts(accounts, route_key, &capability);
+    let (accounts, retry_after, stream_fail_open) =
+        state.ordered_accounts_for_request(accounts, route_key, &capability);
+    if stream_fail_open {
+        warn!(
+            model = capability.model.as_deref().unwrap_or(""),
+            "所有匹配账号均因流式断流暂时隔离，临时放行隔离账号"
+        );
+    }
     if accounts.is_empty() {
         request_log.record_local_failure(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -280,6 +296,12 @@ pub(super) async fn proxy_handler(
                 }
             }
 
+            persist_codex_quota_headers(
+                &state,
+                &ready,
+                response.headers(),
+                status == StatusCode::TOO_MANY_REQUESTS,
+            );
             let policy = classify_failure(status, capability.model.is_some());
             if policy.switch_account {
                 if let Some(log) = &attempt_log {
@@ -375,12 +397,16 @@ pub(super) async fn proxy_handler(
                         estimate.unpriced_tokens,
                     ));
                 }
-                if let Err(error) = state.db.record_usage_async(
-                    &ready.id,
-                    &usage,
-                    estimate.total_cost,
-                    estimate.unpriced_tokens,
-                ).await {
+                if let Err(error) = state
+                    .db
+                    .record_usage_async(
+                        &ready.id,
+                        &usage,
+                        estimate.total_cost,
+                        estimate.unpriced_tokens,
+                    )
+                    .await
+                {
                     warn!(account_id = %ready.id, %error, "记录 Token 用量失败");
                 }
             }
@@ -579,6 +605,66 @@ pub(super) fn classify_failure(status: StatusCode, has_model: bool) -> FailurePo
             cooldown_scope: None,
         },
     }
+}
+
+fn persist_codex_quota_headers(
+    state: &Arc<ProxyState>,
+    account: &Account,
+    headers: &reqwest::header::HeaderMap,
+    force: bool,
+) {
+    if account.account_type != "oauth"
+        || (!force && state.quota_snapshot_throttle.get(&account.id).is_some())
+    {
+        return;
+    }
+    let Some(entry) = quota::codex_header_cache_entry_json(account, headers) else {
+        return;
+    };
+    state.quota_snapshot_throttle.insert(account.id.clone(), ());
+    let db = Arc::clone(&state.db);
+    let app_handle = state.app_handle.clone();
+    let account_id = account.id.clone();
+    let event_entry = serde_json::from_str::<Value>(&entry).ok();
+    let entries = vec![(account_id.clone(), entry)];
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        runtime.spawn(async move {
+            match db
+                .merge_json_setting_entries_async(quota::QUOTA_CACHE_KEY, entries)
+                .await
+            {
+                Ok(()) => {
+                    emit_quota_cache_update(app_handle.as_ref(), &account_id, event_entry.as_ref())
+                }
+                Err(error) => {
+                    warn!(account_id = %account_id, %error, "保存响应头额度快照失败");
+                }
+            }
+        });
+    } else {
+        match db.merge_json_setting_entries(quota::QUOTA_CACHE_KEY, &entries) {
+            Ok(()) => {
+                emit_quota_cache_update(app_handle.as_ref(), &account_id, event_entry.as_ref())
+            }
+            Err(error) => {
+                warn!(account_id = %account_id, %error, "保存响应头额度快照失败");
+            }
+        }
+    }
+}
+
+fn emit_quota_cache_update(
+    app_handle: Option<&tauri::AppHandle>,
+    account_id: &str,
+    entry: Option<&Value>,
+) {
+    let (Some(app_handle), Some(entry)) = (app_handle, entry) else {
+        return;
+    };
+    let _ = app_handle.emit(
+        "quota-cache-updated",
+        json!({"account_id": account_id, "entry": entry}),
+    );
 }
 
 pub(super) fn parse_retry_after(

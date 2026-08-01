@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { ProxyInfo } from '../types'
+import { getAppVersion } from '../lib/commands'
+import { checkForUpdate, downloadAndInstall, onUpdate, type UpdateStatus } from '../lib/updater'
+import type { AppVersion, ProxyInfo } from '../types'
 
 export function AppHeader({ proxy, onSecretAction }: { proxy: ProxyInfo | null; onSecretAction?: () => void }) {
   const serviceLabel = proxy?.running ? '代理运行中' : proxy ? '端口不可用' : '正在启动'
   const [maximized, setMaximized] = useState(false)
+  const [appVersion, setAppVersion] = useState<AppVersion | null>(null)
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: 'idle' })
   const clickCount = useRef(0)
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -29,7 +33,22 @@ export function AppHeader({ proxy, onSecretAction }: { proxy: ProxyInfo | null; 
     return () => { unlisten.then((fn) => fn()).catch(() => undefined) }
   }, [])
 
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+    getAppVersion().then((v) => {
+      setAppVersion(v)
+      // 启动后静默检查更新
+      setTimeout(() => checkForUpdate(v.version, true), 3000)
+    }).catch(() => undefined)
+    const unsub = onUpdate(setUpdateStatus)
+    return unsub
+  }, [])
+
+  const showForcedOverlay = updateStatus.state === 'available' && updateStatus.forced
+  const showProgress = updateStatus.state === 'downloading' || updateStatus.state === 'installing'
+
   return (
+    <>
     <header className="app-header" data-tauri-drag-region>
       <div className="brand" data-tauri-drag-region>
         <div className="brand-mark" aria-hidden="true" onClick={handleBrandClick}>
@@ -46,7 +65,29 @@ export function AppHeader({ proxy, onSecretAction }: { proxy: ProxyInfo | null; 
         </div>
         <div className="brand-copy" data-tauri-drag-region>
           <h1 className="brand-name">Aether</h1>
-          <div className="brand-meta">个人 AI 上游网关</div>
+          <div className="brand-meta">
+            个人 AI 上游网关
+            {appVersion && (
+              <span
+                className={`version-badge${updateStatus.state === 'available' ? ' has-update' : ''}`}
+                data-tooltip={
+                  updateStatus.state === 'available'
+                    ? `v${updateStatus.version} 可用，点击更新`
+                    : `v${appVersion.version} · ${appVersion.commit} · ${appVersion.build_time}`
+                }
+                onClick={() => {
+                  if (updateStatus.state === 'available') {
+                    downloadAndInstall()
+                  } else {
+                    checkForUpdate(appVersion.version, false)
+                  }
+                }}
+              >
+                {updateStatus.state === 'available' ? `↑ v${updateStatus.version}` : `v${appVersion.version}`}
+                {updateStatus.state === 'checking' && <span className="badge-spinner" />}
+              </span>
+            )}
+          </div>
         </div>
       </div>
       <div className="header-right">
@@ -93,5 +134,32 @@ export function AppHeader({ proxy, onSecretAction }: { proxy: ProxyInfo | null; 
         </div>
       </div>
     </header>
+
+    {/* 大版本强制更新遮罩 */}
+    {showForcedOverlay && (
+      <div className="update-overlay">
+        <div className="update-modal">
+          <h3>发现重大更新</h3>
+          <p>新版本 v{updateStatus.version} 包含不兼容变更，需要立即更新。</p>
+          <button className="btn btn-primary" onClick={() => downloadAndInstall()}>
+            立即更新
+          </button>
+        </div>
+      </div>
+    )}
+
+    {/* 下载进度条 */}
+    {showProgress && (
+      <div className="update-progress-bar">
+        <div
+          className="update-progress-fill"
+          style={{ width: updateStatus.state === 'downloading' ? `${updateStatus.progress}%` : '100%' }}
+        />
+        <span className="update-progress-label">
+          {updateStatus.state === 'installing' ? '正在安装…' : `下载中 ${updateStatus.progress}%`}
+        </span>
+      </div>
+    )}
+    </>
   )
 }

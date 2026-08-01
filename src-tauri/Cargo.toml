@@ -1,6 +1,6 @@
 [package]
 name = "sub2api"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2021"
 
 [lib]
@@ -9,9 +9,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+chrono = "0.4"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "unstable"] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -33,6 +34,23 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 tauri-plugin-clipboard-manager = "2"
 toml_edit = "0.22"
+moka = { version = "0.12", features = ["future", "sync"] }
+governor = "0.8"
+tauri-plugin-stronghold = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+notify-rust = "4.18"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+
+# ── Faster dev builds ──────────────────────────────────────────────
+[profile.dev]
+debug = 1              # line tables only (skip full DWARF → much less I/O)
+split-debuginfo = "unpacked"  # avoid linking debug info into binary
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 1          # deps get light optimisation (faster execution, still quick to build)
+debug = false          # no debug info for third-party crates
+incremental = false    # deps rarely change; skip incremental bookkeeping

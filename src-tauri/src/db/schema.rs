@@ -10,7 +10,7 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
             api_key TEXT NOT NULL DEFAULT '',
             base_url TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
          );
          CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -44,7 +44,7 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
         ("reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("unpriced_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("total_cost", "REAL NOT NULL DEFAULT 0.0"),
-        ("updated_at", "TEXT NOT NULL DEFAULT '1970-01-01 00:00:00'"),
+        ("updated_at", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'"),
         ("deleted_at", "TEXT"),
     ];
     for (name, definition) in columns {
@@ -75,7 +75,33 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
             AND unpriced_tokens = 0;
          CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
          CREATE INDEX IF NOT EXISTS idx_accounts_identity
-            ON accounts(chatgpt_account_id, email);",
+            ON accounts(chatgpt_account_id, email);
+         CREATE TABLE IF NOT EXISTS global_usage (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            total_tokens INTEGER NOT NULL DEFAULT 0,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            cached_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+            reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+            unpriced_tokens INTEGER NOT NULL DEFAULT 0,
+            total_cost REAL NOT NULL DEFAULT 0.0,
+            total_requests INTEGER NOT NULL DEFAULT 0
+         );
+         INSERT OR IGNORE INTO global_usage (id) VALUES (1);
+         -- Migrate: seed global_usage from existing account totals (one-time)
+         UPDATE global_usage SET
+            total_tokens = (SELECT COALESCE(SUM(total_tokens), 0) FROM accounts),
+            input_tokens = (SELECT COALESCE(SUM(input_tokens), 0) FROM accounts),
+            output_tokens = (SELECT COALESCE(SUM(output_tokens), 0) FROM accounts),
+            cached_tokens = (SELECT COALESCE(SUM(cached_tokens), 0) FROM accounts),
+            cache_write_tokens = (SELECT COALESCE(SUM(cache_write_tokens), 0) FROM accounts),
+            reasoning_tokens = (SELECT COALESCE(SUM(reasoning_tokens), 0) FROM accounts),
+            unpriced_tokens = (SELECT COALESCE(SUM(unpriced_tokens), 0) FROM accounts),
+            total_cost = (SELECT COALESCE(SUM(total_cost), 0.0) FROM accounts),
+            total_requests = (SELECT COALESCE(SUM(request_count), 0) FROM accounts)
+          WHERE total_tokens = 0 AND input_tokens = 0 AND output_tokens = 0
+            AND total_cost = 0.0 AND total_requests = 0;",
     )
 }
 

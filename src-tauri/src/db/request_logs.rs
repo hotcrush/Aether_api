@@ -441,6 +441,17 @@ impl Db {
         )
     }
 
+    pub fn today_estimated_cost(&self) -> SqlResult<f64> {
+        let conn = lock_connection(self);
+        conn.query_row(
+            "SELECT COALESCE(SUM(estimated_cost), 0.0)
+               FROM request_logs
+              WHERE date(created_at, 'localtime') = date('now', 'localtime')",
+            [],
+            |row| row.get(0),
+        )
+    }
+
     pub fn clear_request_logs(&self) -> SqlResult<u64> {
         let conn = lock_connection(self);
         Ok(conn.execute("DELETE FROM request_logs", [])? as u64)

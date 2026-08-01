@@ -1,4 +1,4 @@
-import { ClipboardCheck, RefreshCw, Upload } from 'lucide-react'
+import { ClipboardCheck, FileDown, RefreshCw, Upload } from 'lucide-react'
 import type { ClipboardImportCandidate } from '../types'
 import { Dialog } from './Dialog'
 
@@ -16,11 +16,13 @@ export function ClipboardImportDialog({
   onConfirm,
 }: ClipboardImportDialogProps) {
   const sourceName = candidate?.source === 'cpa' ? 'CPA' : 'Sub2API'
+  const fromDownload = candidate?.detected_from === 'download'
+  const SourceIcon = fromDownload ? FileDown : ClipboardCheck
 
   return (
     <Dialog
       open={Boolean(candidate)}
-      title="从剪贴板导入"
+      title={fromDownload ? '从下载文件导入' : '从剪贴板导入'}
       onClose={onClose}
       preventClose={busy}
       small
@@ -37,11 +39,14 @@ export function ClipboardImportDialog({
       {candidate && (
         <div className="clipboard-import">
           <div className="clipboard-import-intro">
-            <ClipboardCheck size={22} aria-hidden="true" />
+            <SourceIcon size={22} aria-hidden="true" />
             <div>
               <div className="clipboard-import-heading">
                 检测到 {sourceName} 账号数据
               </div>
+              {fromDownload && candidate.file_name && (
+                <p title={candidate.file_name}>文件：{candidate.file_name}</p>
+              )}
               <p>
                 {candidate.source === 'cpa'
                   ? '确认后将转换为 Sub2API 格式并加入账号池。'

@@ -11,6 +11,19 @@ pub(super) struct StreamObserverContext {
 
 impl StreamObserverContext {
     pub(super) fn record_failure(&self, scope: CooldownScope, message: &str) {
+        self.record_failure_with_policy(scope, message, false);
+    }
+
+    pub(super) fn record_disconnect(&self, scope: CooldownScope, message: &str) {
+        self.record_failure_with_policy(scope, message, true);
+    }
+
+    fn record_failure_with_policy(
+        &self,
+        scope: CooldownScope,
+        message: &str,
+        stream_disconnect: bool,
+    ) {
         // Use async DB write if a tokio runtime is available, otherwise fall back to sync
         if tokio::runtime::Handle::try_current().is_ok() {
             let db = Arc::clone(&self.state.db);
@@ -22,12 +35,17 @@ impl StreamObserverContext {
         } else {
             let _ = self.state.db.set_error(&self.account_id, message);
         }
-        self.state.apply_cooldown(
-            &self.account_id,
-            &self.capability,
-            scope,
-            Duration::from_secs(20),
-        );
+        if stream_disconnect {
+            self.state
+                .quarantine_stream(&self.account_id, &self.capability, scope);
+        } else {
+            self.state.apply_cooldown(
+                &self.account_id,
+                &self.capability,
+                scope,
+                Duration::from_secs(20),
+            );
+        }
         self.state.unbind_route(self.route_key, &self.account_id);
         if let Some(log) = &self.request_log {
             log.finish("error", Some(message));
@@ -50,12 +68,10 @@ impl StreamObserverContext {
             let total_cost = estimate.total_cost;
             let unpriced_tokens = estimate.unpriced_tokens;
             tokio::spawn(async move {
-                if let Err(error) = db.record_usage_async(
-                    &account_id,
-                    &usage,
-                    total_cost,
-                    unpriced_tokens,
-                ).await {
+                if let Err(error) = db
+                    .record_usage_async(&account_id, &usage, total_cost, unpriced_tokens)
+                    .await
+                {
                     warn!(account_id = %account_id, %error, "记录 Token 用量失败");
                 }
             });
@@ -196,7 +212,7 @@ impl StreamBodyObserver {
             return;
         }
         self.failure_recorded = true;
-        self.context.record_failure(
+        self.context.record_disconnect(
             CooldownScope::Account,
             &format!("upstream stream transport failed after commit: {error}"),
         );
@@ -209,7 +225,7 @@ impl StreamBodyObserver {
             && !self.failure_recorded
         {
             self.failure_recorded = true;
-            self.context.record_failure(
+            self.context.record_disconnect(
                 CooldownScope::Capability,
                 "upstream stream ended after commit without a terminal event",
             );
@@ -250,7 +266,13 @@ pub(super) async fn to_client_response(
                 "upstream stream ended without a terminal response event".to_string(),
             )
         })?;
-        return Ok((json_response(status, completed), usage, false));
+        let mut client_response = json_response(status, completed);
+        *client_response.headers_mut() = headers;
+        client_response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        return Ok((client_response, usage, false));
     }
 
     let content_type = response

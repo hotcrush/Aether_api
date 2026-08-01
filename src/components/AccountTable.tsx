@@ -1,6 +1,6 @@
 import { Activity, AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, KeyRound, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { formatExpiry } from '../lib/format'
+import { formatExpiry } from '../lib/time'
 import type { Account, QuotaQueryState, RelayUsageQueryState } from '../types'
 import { CapacityEditor } from './CapacityEditor'
 import { PriorityEditor } from './PriorityEditor'

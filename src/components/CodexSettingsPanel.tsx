@@ -95,25 +95,24 @@ export function CodexSettingsPanel({
               本地代理接管 Codex Provider
             </div>
           </div>
-          <span className={`codex-status ${statusKind}`}>
-            {status?.active ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
-            {statusLabel}
-          </span>
-        </div>
-
-        <div className="codex-action-strip">
-          <button
-            className={`btn ${restorable ? '' : 'btn-primary'}`}
-            onClick={onToggleTakeover}
-            disabled={!proxy || busy}
-            data-tooltip={actionTitle}
-          >
-            {restorable ? <RotateCcw className={busy ? 'spin' : undefined} size={16} /> : <Power size={16} />}
-            {actionLabel}
-          </button>
-          <div className="codex-action-meta">
-            <ShieldCheck size={15} />
-            {status?.backup_available ? '已保存原始配置快照' : '接管时保存原始配置快照'}
+          <div className="codex-head-actions">
+            <div className="codex-action-meta">
+              <ShieldCheck size={15} />
+              {status?.backup_available ? '已保存原始配置快照' : '接管时保存原始配置快照'}
+            </div>
+            <span className={`codex-status ${statusKind}`}>
+              {status?.active ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
+              {statusLabel}
+            </span>
+            <button
+              className={`btn ${restorable ? '' : 'btn-primary'}`}
+              onClick={onToggleTakeover}
+              disabled={!proxy || busy}
+              data-tooltip={actionTitle}
+            >
+              {restorable ? <RotateCcw className={busy ? 'spin' : undefined} size={16} /> : <Power size={16} />}
+              {actionLabel}
+            </button>
           </div>
         </div>
 
@@ -199,34 +198,33 @@ export function CodexSettingsPanel({
                 新会话统一到 {sessionHistory?.provider_id || 'custom'}
               </div>
             </div>
-            <span className={`codex-status ${historyStatusKind}`}>
-              {sessionHistory?.active ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
-              {historyStatusLabel}
-            </span>
-          </div>
-
-          <div className="codex-history-actions">
-            <button
-              className="btn"
-              onClick={onMigrateHistory}
-              disabled={migrateDisabled}
-              data-tooltip="迁移 openai/aether 既有会话"
-            >
-              <Database className={migrateHistoryBusy ? 'spin' : undefined} size={16} />
-              迁移既有会话
-            </button>
-            <button
-              className="btn"
-              onClick={onRestoreHistory}
-              disabled={restoreDisabled}
-              data-tooltip="按备份账本恢复官方会话"
-            >
-              <RotateCcw className={restoreHistoryBusy ? 'spin' : undefined} size={16} />
-              恢复官方会话
-            </button>
-            <div className="codex-action-meta">
-              <ShieldCheck size={15} />
-              {sessionHistory?.backup_available ? '已有会话备份账本' : '迁移时生成会话备份账本'}
+            <div className="codex-head-actions">
+              <div className="codex-action-meta">
+                <ShieldCheck size={15} />
+                {sessionHistory?.backup_available ? '已有会话备份账本' : '迁移时生成会话备份账本'}
+              </div>
+              <span className={`codex-status ${historyStatusKind}`}>
+                {sessionHistory?.active ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
+                {historyStatusLabel}
+              </span>
+              <button
+                className="btn"
+                onClick={onMigrateHistory}
+                disabled={migrateDisabled}
+                data-tooltip="迁移 openai/aether 既有会话"
+              >
+                <Database className={migrateHistoryBusy ? 'spin' : undefined} size={16} />
+                迁移既有会话
+              </button>
+              <button
+                className="btn"
+                onClick={onRestoreHistory}
+                disabled={restoreDisabled}
+                data-tooltip="按备份账本恢复官方会话"
+              >
+                <RotateCcw className={restoreHistoryBusy ? 'spin' : undefined} size={16} />
+                恢复官方会话
+              </button>
             </div>
           </div>
 

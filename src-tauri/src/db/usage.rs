@@ -8,21 +8,32 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE accounts SET request_count = request_count + 1,
-                    last_used_at = datetime('now', 'localtime'), last_error = '' WHERE id = ?1",
+                    last_used_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), last_error = '' WHERE id = ?1",
             [id],
+        )?;
+        conn.execute(
+            "UPDATE global_usage SET total_requests = total_requests + 1 WHERE id = 1",
+            [],
         )?;
         Ok(())
     }
 
     /// Async version for proxy hot path.
     pub async fn mark_used_async(&self, id: &str) -> SqlResult<()> {
+        let Some(async_conn) = self.async_conn() else {
+            return self.mark_used(id);
+        };
         let id = id.to_owned();
-        self.async_conn
+        async_conn
             .call(move |conn| {
                 conn.execute(
                     "UPDATE accounts SET request_count = request_count + 1,
-                            last_used_at = datetime('now', 'localtime'), last_error = '' WHERE id = ?1",
+                            last_used_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), last_error = '' WHERE id = ?1",
                     [&id],
+                )?;
+                conn.execute(
+                    "UPDATE global_usage SET total_requests = total_requests + 1 WHERE id = 1",
+                    [],
                 )?;
                 Ok(())
             })
@@ -82,6 +93,28 @@ impl Db {
                 cost,
             ],
         )?;
+        conn.execute(
+            "UPDATE global_usage SET
+                total_tokens = total_tokens + ?1,
+                input_tokens = input_tokens + ?2,
+                output_tokens = output_tokens + ?3,
+                cached_tokens = cached_tokens + ?4,
+                cache_write_tokens = cache_write_tokens + ?5,
+                reasoning_tokens = reasoning_tokens + ?6,
+                unpriced_tokens = unpriced_tokens + ?7,
+                total_cost = total_cost + ?8
+              WHERE id = 1",
+            rusqlite::params![
+                total_tokens,
+                input_tokens,
+                output_tokens,
+                cached_tokens,
+                cache_write_tokens,
+                reasoning_tokens,
+                unpriced_tokens,
+                cost,
+            ],
+        )?;
         Ok(())
     }
 
@@ -111,8 +144,11 @@ impl Db {
         if total_tokens <= 0 && cost <= 0.0 {
             return Ok(());
         }
+        let Some(async_conn) = self.async_conn() else {
+            return self.record_usage(id, usage, cost, unpriced_tokens);
+        };
         let id = id.to_owned();
-        self.async_conn
+        async_conn
             .call(move |conn| {
                 conn.execute(
                     "UPDATE accounts SET
@@ -137,6 +173,28 @@ impl Db {
                         cost,
                     ],
                 )?;
+                conn.execute(
+                    "UPDATE global_usage SET
+                        total_tokens = total_tokens + ?1,
+                        input_tokens = input_tokens + ?2,
+                        output_tokens = output_tokens + ?3,
+                        cached_tokens = cached_tokens + ?4,
+                        cache_write_tokens = cache_write_tokens + ?5,
+                        reasoning_tokens = reasoning_tokens + ?6,
+                        unpriced_tokens = unpriced_tokens + ?7,
+                        total_cost = total_cost + ?8
+                      WHERE id = 1",
+                    rusqlite::params![
+                        total_tokens,
+                        input_tokens,
+                        output_tokens,
+                        cached_tokens,
+                        cache_write_tokens,
+                        reasoning_tokens,
+                        unpriced_tokens,
+                        cost,
+                    ],
+                )?;
                 Ok(())
             })
             .await
@@ -149,7 +207,7 @@ impl Db {
     pub fn set_error(&self, id: &str, error: &str) -> SqlResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE accounts SET last_error = ?2, updated_at = datetime('now', 'localtime') WHERE id = ?1",
+            "UPDATE accounts SET last_error = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1",
             rusqlite::params![id, truncate(error, 500)],
         )?;
         Ok(())
@@ -157,12 +215,15 @@ impl Db {
 
     /// Async version for proxy hot path.
     pub async fn set_error_async(&self, id: &str, error: &str) -> SqlResult<()> {
+        let Some(async_conn) = self.async_conn() else {
+            return self.set_error(id, error);
+        };
         let id = id.to_owned();
         let error = truncate(error, 500);
-        self.async_conn
+        async_conn
             .call(move |conn| {
                 conn.execute(
-                    "UPDATE accounts SET last_error = ?2, updated_at = datetime('now', 'localtime') WHERE id = ?1",
+                    "UPDATE accounts SET last_error = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1",
                     rusqlite::params![id, error],
                 )?;
                 Ok(())
@@ -199,13 +260,27 @@ impl Db {
                  OR total_cost > 0",
             [],
         )?;
+        conn.execute(
+            "UPDATE global_usage SET
+                total_tokens = 0,
+                input_tokens = 0,
+                output_tokens = 0,
+                cached_tokens = 0,
+                cache_write_tokens = 0,
+                reasoning_tokens = 0,
+                unpriced_tokens = 0,
+                total_cost = 0.0,
+                total_requests = 0
+              WHERE id = 1",
+            [],
+        )?;
         Ok(affected as u64)
     }
 
     pub fn total_request_count(&self) -> SqlResult<i64> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT COALESCE(SUM(request_count), 0) FROM accounts",
+            "SELECT total_requests FROM global_usage WHERE id = 1",
             [],
             |row| row.get(0),
         )
@@ -222,17 +297,9 @@ impl Db {
     pub fn usage_totals(&self) -> SqlResult<UsageTotals> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
-            "SELECT
-                COALESCE(SUM(total_tokens), 0),
-                COALESCE(SUM(input_tokens), 0),
-                COALESCE(SUM(output_tokens), 0),
-                COALESCE(SUM(cached_tokens), 0),
-                COALESCE(SUM(cache_write_tokens), 0),
-                COALESCE(SUM(reasoning_tokens), 0),
-                COALESCE(SUM(unpriced_tokens), 0),
-                COALESCE(SUM(total_cost), 0.0)
-               FROM accounts
-              WHERE deleted_at IS NULL",
+            "SELECT total_tokens, input_tokens, output_tokens, cached_tokens,
+                    cache_write_tokens, reasoning_tokens, unpriced_tokens, total_cost
+               FROM global_usage WHERE id = 1",
             [],
             |row| {
                 Ok(UsageTotals {

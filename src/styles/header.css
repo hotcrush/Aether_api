@@ -87,7 +87,122 @@
 }
 
 .brand-meta {
-  display: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(67, 56, 202, 0.08);
+  color: #4338ca;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s ease;
+}
+
+.version-badge:hover {
+  background: rgba(67, 56, 202, 0.14);
+}
+
+.version-badge.has-update {
+  background: rgba(33, 161, 121, 0.12);
+  color: #12775a;
+  animation: badge-pulse 2s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(33, 161, 121, 0.2); }
+  50% { box-shadow: 0 0 0 3px rgba(33, 161, 121, 0.1); }
+}
+
+.badge-spinner {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid rgba(67, 56, 202, 0.25);
+  border-top-color: #4338ca;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── 强制更新遮罩 ── */
+
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+.update-modal {
+  width: min(360px, 90vw);
+  padding: 32px 28px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.25);
+  text-align: center;
+}
+
+.update-modal h3 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  font-weight: 720;
+}
+
+.update-modal p {
+  margin: 0 0 22px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ── 下载进度条 ── */
+
+.update-progress-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 9998;
+  height: 26px;
+  background: rgba(30, 27, 75, 0.92);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  position: absolute;
+  inset: 0;
+  background: rgba(33, 161, 121, 0.35);
+  transition: width 0.3s ease;
+}
+
+.update-progress-label {
+  position: relative;
+  display: block;
+  line-height: 26px;
+  padding: 0 14px;
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .service-state {
@@ -114,45 +229,4 @@
 .state-dot.online {
   background: #21a179;
   box-shadow: 0 0 0 3px rgba(33, 161, 121, 0.15);
-}
-
-/* ── Tab Navigation ── */
-
-.tab-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 0 clamp(16px, 3vw, 32px);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.tab-item {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 14px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12.5px;
-  font-weight: 550;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-}
-
-.tab-item:hover {
-  color: var(--text);
-  background: var(--surface-muted);
-}
-
-.tab-item.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
 }

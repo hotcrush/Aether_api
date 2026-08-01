@@ -1,5 +1,6 @@
 @import './tokens.css';
 @import './header.css';
+@import './workspace-tabs.css';
 @import './proxy.css';
 @import './codex.css';
 @import './toolbar.css';
@@ -8,6 +9,7 @@
 @import './quota.css';
 @import './logger.css';
 @import './monitor.css';
+@import './market.css';
 @import './overlays.css';
 @import './toast.css';
 @import './tooltip.css';

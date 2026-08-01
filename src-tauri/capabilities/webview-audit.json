@@ -1,0 +1,10 @@
+{
+  "identifier": "webview-audit",
+  "description": "Allows isolated remote workspace webviews to report copy actions only",
+  "local": false,
+  "remote": {
+    "urls": ["http://*/*", "https://*/*"]
+  },
+  "webviews": ["web-*"],
+  "permissions": ["webview-audit:allow-report-copy"]
+}

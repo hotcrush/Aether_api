@@ -12,6 +12,7 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
+import { formatRelativeTime, formatTime } from '../lib/time'
 import type {
   ChannelMonitorEvent,
   ChannelMonitorItem,
@@ -426,34 +427,4 @@ function formatNumber(value: number | null | undefined) {
 function formatUsd(value: number) {
   if (!Number.isFinite(value)) return '$0.0000'
   return `$${value.toFixed(value < 0.01 ? 6 : 4)}`
-}
-
-function parseDate(value: number | string) {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  const date = Number.isFinite(numeric)
-    ? new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric)
-    : new Date(value)
-  return Number.isNaN(date.getTime()) ? null : date
-}
-
-function formatTime(value: number | string) {
-  return parseDate(value)?.toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }) ?? '未知'
-}
-
-function formatRelativeTime(value: number | string) {
-  const date = parseDate(value)
-  if (!date) return '时间未知'
-  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000))
-  if (seconds < 10) return '刚刚'
-  if (seconds < 60) return `${seconds} 秒前`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes} 分钟前`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} 小时前`
-  return `${Math.floor(hours / 24)} 天前`
 }

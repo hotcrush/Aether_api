@@ -2,6 +2,7 @@ use super::AppState;
 use crate::db::Db;
 use crate::{codex_takeover, pricing};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tracing::warn;
@@ -33,6 +34,26 @@ pub(crate) fn set_cache(
 }
 
 #[tauri::command]
+pub(crate) fn merge_cache_entries(
+    state: tauri::State<AppState>,
+    key: String,
+    entries: BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    let entries = entries
+        .into_iter()
+        .map(|(entry_key, value)| {
+            serde_json::to_string(&value)
+                .map(|encoded| (entry_key, encoded))
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    state
+        .db
+        .merge_json_setting_entries(&key, &entries)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub(crate) fn get_proxy_info(state: tauri::State<AppState>) -> serde_json::Value {
     let accounts = state.db.list_accounts().unwrap_or_default();
     let account_count = accounts.len();
@@ -42,6 +63,7 @@ pub(crate) fn get_proxy_info(state: tauri::State<AppState>) -> serde_json::Value
         .count();
     let total_requests = state.db.total_request_count().unwrap_or(0);
     let usage = state.db.usage_totals().unwrap_or_default();
+    let today_cost = state.db.today_estimated_cost().unwrap_or(0.0);
     let access_token = state.access_token.load().as_str().to_owned();
     json!({
         "port": state.proxy_port,
@@ -60,6 +82,7 @@ pub(crate) fn get_proxy_info(state: tauri::State<AppState>) -> serde_json::Value
         "reasoning_tokens": usage.reasoning_tokens,
         "unpriced_tokens": usage.unpriced_tokens,
         "total_cost": usage.total_cost,
+        "today_cost": today_cost,
         "pricing_updated_at": pricing::PRICING_UPDATED_AT,
         "pricing_source": pricing::PRICING_SOURCE,
         "account_capacities": state.capacity.snapshot(),
@@ -122,4 +145,20 @@ pub(crate) fn reset_access_token(state: tauri::State<AppState>) -> Result<String
         .map_err(|error| error.to_string())?;
     state.access_token.store(Arc::new(access_token.clone()));
     Ok(access_token)
+}
+
+/// Build-time metadata injected by build.rs.
+const GIT_COMMIT: &str = env!("AETHER_GIT_COMMIT");
+const BUILD_TIME: &str = env!("AETHER_BUILD_TIME");
+
+#[tauri::command]
+pub(crate) fn get_app_version() -> serde_json::Value {
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "commit": GIT_COMMIT,
+        "build_time": BUILD_TIME,
+        "profile": profile,
+        "tauri_version": tauri::VERSION,
+    })
 }

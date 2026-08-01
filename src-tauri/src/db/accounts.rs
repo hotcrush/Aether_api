@@ -4,6 +4,19 @@ use rusqlite::{Connection, OptionalExtension, Result as SqlResult};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
+/// Standalone query used by `Db::refresh_active_accounts` to populate the ArcSwap cache.
+pub(super) fn query_active_accounts(conn: &Connection) -> SqlResult<Vec<Account>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
+                client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
+                expires_at, priority, models, weight, status, last_error, last_used_at,
+                request_count, created_at, updated_at, concurrency
+           FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
+    )?;
+    let rows = stmt.query_map([], account_from_row)?;
+    rows.collect()
+}
+
 impl Db {
     pub fn list_accounts(&self) -> SqlResult<Vec<Account>> {
         self.query_accounts(
@@ -30,7 +43,10 @@ impl Db {
 
     /// Async version for proxy hot path.
     pub async fn get_active_accounts_async(&self) -> SqlResult<Vec<Account>> {
-        self.async_conn
+        let Some(async_conn) = self.async_conn() else {
+            return self.get_active_accounts();
+        };
+        async_conn
             .call(|conn| {
                 let mut stmt = conn.prepare(
                     "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
@@ -100,7 +116,8 @@ impl Db {
                     models = COALESCE(?16, models),
                     weight = COALESCE(?17, weight),
                     concurrency = COALESCE(?18, concurrency),
-                    status = 'active', last_error = '', updated_at = datetime('now', 'localtime')
+                    status = 'active', deleted_at = NULL, last_error = '',
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
                   WHERE id = ?1",
                 rusqlite::params![
                     id,
@@ -137,7 +154,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, concurrency, updated_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-                            datetime('now', 'localtime'))",
+                            strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
                 rusqlite::params![
                     id,
                     name,
@@ -188,7 +205,7 @@ impl Db {
                 email = CASE WHEN ?8 <> '' THEN ?8 ELSE email END,
                 plan_type = CASE WHEN ?9 <> '' THEN ?9 ELSE plan_type END,
                 expires_at = ?10, status = 'active', last_error = '',
-                updated_at = datetime('now', 'localtime')
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
               WHERE id = ?1",
             rusqlite::params![
                 id,
@@ -211,7 +228,7 @@ impl Db {
     pub fn delete_account(&self, id: &str) -> SqlResult<bool> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.execute(
-            "UPDATE accounts SET deleted_at = datetime('now', 'localtime'), status = 'disabled', updated_at = datetime('now', 'localtime') WHERE id = ?1 AND deleted_at IS NULL",
+            "UPDATE accounts SET deleted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), status = 'disabled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1 AND deleted_at IS NULL",
             [id],
         )? > 0)
     }
@@ -231,7 +248,7 @@ impl Db {
     pub fn restore_account(&self, id: &str) -> SqlResult<bool> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.execute(
-            "UPDATE accounts SET deleted_at = NULL, status = 'active', last_error = '', updated_at = datetime('now', 'localtime') WHERE id = ?1 AND deleted_at IS NOT NULL",
+            "UPDATE accounts SET deleted_at = NULL, status = 'active', last_error = '', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1 AND deleted_at IS NOT NULL",
             [id],
         )? > 0)
     }
@@ -253,7 +270,7 @@ impl Db {
     pub fn set_status(&self, id: &str, status: &str) -> SqlResult<bool> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.execute(
-            "UPDATE accounts SET status = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2",
+            "UPDATE accounts SET status = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?2",
             rusqlite::params![status, id],
         )? > 0)
     }
@@ -261,7 +278,7 @@ impl Db {
     pub fn set_priority(&self, id: &str, priority: i64) -> SqlResult<bool> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.execute(
-            "UPDATE accounts SET priority = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2",
+            "UPDATE accounts SET priority = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?2",
             rusqlite::params![priority, id],
         )? > 0)
     }
@@ -270,7 +287,7 @@ impl Db {
         validate_concurrency(Some(concurrency))?;
         let conn = self.conn.lock().unwrap();
         Ok(conn.execute(
-            "UPDATE accounts SET concurrency = ?1, updated_at = datetime('now', 'localtime') WHERE id = ?2",
+            "UPDATE accounts SET concurrency = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?2",
             rusqlite::params![concurrency, id],
         )? > 0)
     }

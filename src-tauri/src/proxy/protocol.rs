@@ -297,6 +297,52 @@ pub(super) fn is_responses_path(path: &str) -> bool {
         || path.starts_with("/backend-api/codex/responses/")
 }
 
+const MAX_RESPONSE_PATH_SEGMENT_LENGTH: usize = 128;
+const MAX_RESPONSE_PATH_SEGMENTS: usize = 8;
+
+pub(super) fn is_forwardable_responses_path(path: &str) -> bool {
+    !is_responses_path(path) || safe_response_path_suffix(response_path_suffix(path))
+}
+
+pub(super) fn safe_response_path_suffix_from(path: &str) -> Option<&str> {
+    if !is_responses_path(path) {
+        return None;
+    }
+    let suffix = response_path_suffix(path);
+    safe_response_path_suffix(suffix).then_some(suffix)
+}
+
+fn safe_response_path_suffix(suffix: &str) -> bool {
+    if suffix.is_empty() {
+        return true;
+    }
+    let Some(raw_segments) = suffix.strip_prefix('/') else {
+        return false;
+    };
+    let segments = raw_segments.split('/').collect::<Vec<_>>();
+    if segments.len() > MAX_RESPONSE_PATH_SEGMENTS {
+        return false;
+    }
+    segments.into_iter().all(safe_response_path_segment)
+}
+
+fn safe_response_path_segment(segment: &str) -> bool {
+    if segment.is_empty() || segment.len() > MAX_RESPONSE_PATH_SEGMENT_LENGTH {
+        return false;
+    }
+    let mut dots_only = true;
+    for byte in segment.bytes() {
+        let allowed = byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.');
+        if !allowed {
+            return false;
+        }
+        if byte != b'.' {
+            dots_only = false;
+        }
+    }
+    !dots_only
+}
+
 pub(super) fn is_compact_path(path: &str) -> bool {
     response_path_suffix(path).starts_with("/compact")
 }
