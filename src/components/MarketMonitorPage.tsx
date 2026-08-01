@@ -565,7 +565,7 @@ function ProductSection({
 
   const priceProfiles = useMemo(() => buildProductPriceProfiles(products), [products])
 
-  const visible = useMemo(() => {
+  const filtered = useMemo(() => {
     const minimum = minimumPrice === '' ? null : Number(minimumPrice)
     const maximum = maximumPrice === '' ? null : Number(maximumPrice)
     return products
@@ -600,6 +600,32 @@ function ProductSection({
     shopToken,
     verificationFilter,
   ])
+
+  // 按商品名称去重：同名商品仅保留最低价，记录店铺数与汇总库存
+  const shopCountByName = useMemo(() => {
+    const map = new Map<string, { shops: number; stock: number }>()
+    for (const product of filtered) {
+      const key = product.name.trim().toLocaleLowerCase()
+      const entry = map.get(key)
+      if (entry) {
+        entry.shops += 1
+        entry.stock += product.stockCount
+      } else {
+        map.set(key, { shops: 1, stock: product.stockCount })
+      }
+    }
+    return map
+  }, [filtered])
+
+  const visible = useMemo(() => {
+    const seen = new Set<string>()
+    return filtered.filter((product) => {
+      const key = product.name.trim().toLocaleLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [filtered])
 
   const totalPages = Math.max(1, Math.ceil(visible.length / PRODUCT_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages)
@@ -791,6 +817,8 @@ function ProductSection({
               <div className="market-product-list">
                 {group.items.map((product, index) => {
                   const priceTier = getProductPriceTier(product, priceProfiles)
+                  const dedupe = shopCountByName.get(product.name.trim().toLocaleLowerCase())
+                  const multiShop = dedupe && dedupe.shops > 1
                   return (
                     <button
                       className={`market-product-row${index === 0 ? ' cheapest' : ''}`}
@@ -801,7 +829,10 @@ function ProductSection({
                       <span className="market-product-copy">
                         <strong>{product.name}</strong>
                         <small>
-                          {product.shopName} · 库存 {formatNumber(product.stockCount)}
+                          {product.shopName}
+                          {multiShop ? ` 等${dedupe.shops}家店` : ''}
+                          {' · 库存 '}
+                          {formatNumber(multiShop ? dedupe.stock : product.stockCount)}
                           {product.category === 'gptplus' ? ` · ${verificationLabel(product.verificationStatus)}` : ''}
                         </small>
                       </span>
