@@ -22,6 +22,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
@@ -62,6 +63,7 @@ export type MarketSection = 'products' | 'stores' | 'analytics' | 'alerts'
 type ProductView = 'compare' | 'stores' | 'all'
 type ProductPriceScope = 'bargain' | 'affordable' | 'all'
 type VerificationFilter = 'all' | 'verified' | 'unverified' | 'unknown'
+type CategoryFilter = 'all' | 'focus' | 'k12' | 'gptplus' | 'bugteam' | 'other'
 
 interface MarketMonitorPageProps {
   initialSection?: MarketSection
@@ -94,11 +96,14 @@ const sections: Array<{ id: MarketSection; label: string; icon: ReactNode }> = [
 ]
 
 const categoryLabels: Record<string, string> = {
+  focus: '★ 关注',
   k12: 'K12',
   gptplus: 'GPT Plus',
   bugteam: 'BUG TEAM',
   other: '其他',
 }
+
+const FOCUS_CATEGORIES = new Set(['k12', 'gptplus', 'bugteam'])
 
 export function MarketMonitorPage({
   initialSection = 'products',
@@ -386,7 +391,6 @@ export function MarketMonitorPage({
   }
   const enabledShops = shops.filter((shop) => shop.enabled)
   const onlineShops = enabledShops.filter((shop) => shop.ok)
-  const totalStock = products.reduce((total, product) => total + product.stockCount, 0)
   const settingsDirty = JSON.stringify(settings) !== JSON.stringify(savedSettings)
 
   return (
@@ -394,13 +398,13 @@ export function MarketMonitorPage({
       <section className="market-dashboard" aria-label="市场监控">
         <header className="market-hero">
           <div className="market-hero-copy">
-            <span className="market-eyebrow"><Boxes size={14} />本地市场采集</span>
             <h2>市场监控</h2>
             <p>
+              {snapshot?.nextRefreshAt && <RefreshCountdown target={snapshot.nextRefreshAt} />}
+              {snapshot?.nextRefreshAt && snapshot?.lastCheckedAt && ' · '}
               {snapshot?.lastCheckedAt
                 ? `更新于 ${formatDateTime(snapshot.lastCheckedAt)}`
-                : loading ? '正在载入本地快照' : '等待首次采集'}
-              {snapshot?.protection.dataMode === 'cached' ? ' · 部分店铺使用缓存' : ''}
+                : loading ? '正在载入' : '等待首次采集'}
             </p>
           </div>
           <button className="btn market-refresh" onClick={() => { void refresh() }} disabled={refreshing}>
@@ -425,23 +429,20 @@ export function MarketMonitorPage({
         )}
 
         <div className="market-summary">
-          <MarketSummary label="有货商品" value={formatNumber(products.length)} detail={`总库存 ${formatNumber(totalStock)}`} />
+          <MarketSummary label="有货商品" value={formatNumber(products.length)} />
           <MarketSummary
             label="在线店铺"
             value={`${onlineShops.length}/${enabledShops.length}`}
-            detail={enabledShops.length === onlineShops.length ? '当前全部在线' : `${enabledShops.length - onlineShops.length} 家异常`}
             tone={enabledShops.length === onlineShops.length ? 'healthy' : 'warning'}
           />
           <MarketSummary
             label="采集保护"
             value={protectionLabel(snapshot)}
-            detail={snapshot?.protection.fallbackUsed ? '正在使用备用 API' : '主 API'}
             tone={snapshot?.protection.mode === 'normal' ? 'healthy' : 'warning'}
           />
           <MarketSummary
             label="未读提醒"
             value={formatNumber(snapshot?.unreadAlertCount ?? 0)}
-            detail="最近 90 天提醒"
             tone={(snapshot?.unreadAlertCount ?? 0) > 0 ? 'danger' : 'neutral'}
           />
         </div>
@@ -528,19 +529,16 @@ export function MarketMonitorPage({
 function MarketSummary({
   label,
   value,
-  detail,
   tone = 'neutral',
 }: {
   label: string
   value: string
-  detail: string
   tone?: 'healthy' | 'warning' | 'danger' | 'neutral'
 }) {
   return (
     <div className={`market-summary-item market-tone-${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
-      <small>{detail}</small>
     </div>
   )
 }
@@ -556,7 +554,7 @@ function ProductSection({
 }) {
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase())
-  const [category, setCategory] = useState('all')
+  const [category, setCategory] = useState<CategoryFilter>('focus')
   const [shopToken, setShopToken] = useState('all')
   const [minimumPrice, setMinimumPrice] = useState('')
   const [maximumPrice, setMaximumPrice] = useState('')
@@ -572,7 +570,11 @@ function ProductSection({
     const maximum = maximumPrice === '' ? null : Number(maximumPrice)
     return products
       .filter((product) => product.stockCount > 0)
-      .filter((product) => category === 'all' || (product.category || 'other') === category)
+      .filter((product) => {
+        if (category === 'all') return true
+        if (category === 'focus') return FOCUS_CATEGORIES.has(product.category || '')
+        return (product.category || 'other') === category
+      })
       .filter((product) => shopToken === 'all' || product.shopToken === shopToken)
       .filter((product) => category !== 'gptplus'
         || verificationFilter === 'all'
@@ -651,14 +653,27 @@ function ProductSection({
       }))
   }, [pageProducts, view])
 
-  const availableCategories = [...new Set(products
-    .filter((product) => product.stockCount > 0)
-    .map((product) => product.category || 'other'))]
-    .sort((left, right) => categoryOrder(left) - categoryOrder(right))
-
   return (
     <section className="market-workspace market-products" aria-label="商品比价">
       <div className="market-product-toolbar">
+        <div className="market-category-chips" aria-label="快捷分类筛选">
+          {(['focus', 'k12', 'gptplus', 'bugteam', 'all'] as const).map((value) => (
+            <button
+              type="button"
+              className={`market-category-chip${category === value ? ' active' : ''}`}
+              onClick={() => setCategory(value)}
+              key={value}
+            >
+              {categoryLabel(value)}
+              {value !== 'all' && value !== 'focus' && (
+                <small>{products.filter((p) => p.stockCount > 0 && (p.category || 'other') === value).length}</small>
+              )}
+              {value === 'focus' && (
+                <small>{products.filter((p) => p.stockCount > 0 && FOCUS_CATEGORIES.has(p.category || '')).length}</small>
+              )}
+            </button>
+          ))}
+        </div>
         <div className="market-view-tabs" aria-label="商品浏览方式">
           <button type="button" className={view === 'compare' ? 'active' : ''} onClick={() => setView('compare')}>
             <Scale size={14} /><span>分类比价</span>
@@ -681,15 +696,6 @@ function ProductSection({
         <label className="market-search-field">
           <Search size={14} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索商品或店铺" />
-        </label>
-        <label className="market-filter-field">
-          <span>分类</span>
-          <select value={category} onChange={(event) => setCategory(event.target.value)}>
-            <option value="all">全部分类</option>
-            {availableCategories.map((value) => (
-              <option value={value} key={value}>{categoryLabel(value)}</option>
-            ))}
-          </select>
         </label>
         <label className="market-filter-field">
           <span>店铺</span>
@@ -971,10 +977,10 @@ function AnalyticsSection({
       ) : (
         <>
           <div className="market-analytics-summary">
-            <MarketSummary label="当前总库存" value={formatNumber(latest?.totalStock ?? 0)} detail={`${stockChange >= 0 ? '+' : ''}${formatNumber(stockChange)} 件`} tone={stockChange < 0 ? 'warning' : 'healthy'} />
-            <MarketSummary label="当前商品" value={formatNumber(latest?.productCount ?? 0)} detail={`${latest?.categories.length ?? 0} 个分类`} />
-            <MarketSummary label="集中补库" value={formatNumber(eventCounts.surge)} detail="所选区间" tone={eventCounts.surge ? 'warning' : 'neutral'} />
-            <MarketSummary label="价格信号" value={formatNumber(eventCounts.price)} detail={`另有 ${eventCounts.unavailable} 次售罄`} tone={eventCounts.price ? 'warning' : 'neutral'} />
+            <MarketSummary label="当前总库存" value={formatNumber(latest?.totalStock ?? 0)} tone={stockChange < 0 ? 'warning' : 'healthy'} />
+            <MarketSummary label="当前商品" value={formatNumber(latest?.productCount ?? 0)} />
+            <MarketSummary label="集中补库" value={formatNumber(eventCounts.surge)} tone={eventCounts.surge ? 'warning' : 'neutral'} />
+            <MarketSummary label="价格信号" value={formatNumber(eventCounts.price)} tone={eventCounts.price ? 'warning' : 'neutral'} />
           </div>
           <div className="market-chart-panel">
             <header><strong>库存走势</strong><span>{rangeLabel(range)}</span></header>
@@ -1318,6 +1324,33 @@ function DeleteShopDialog({
       </div>
     </Dialog>
   )
+}
+
+function RefreshCountdown({ target }: { target: string }) {
+  const [remaining, setRemaining] = useState('')
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    const tick = () => {
+      const diff = new Date(target).getTime() - Date.now()
+      if (diff <= 0) {
+        setRemaining('即将刷新')
+        if (intervalRef.current) clearInterval(intervalRef.current)
+        return
+      }
+      const seconds = Math.ceil(diff / 1000)
+      if (seconds >= 60) {
+        setRemaining(`${Math.floor(seconds / 60)}分${seconds % 60}秒后刷新`)
+      } else {
+        setRemaining(`${seconds}秒后刷新`)
+      }
+    }
+    tick()
+    intervalRef.current = setInterval(tick, 1000)
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
+  }, [target])
+
+  return <span className="market-countdown">{remaining}</span>
 }
 
 function protectionLabel(snapshot: MarketSnapshot | null) {

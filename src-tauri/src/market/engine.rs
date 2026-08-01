@@ -19,14 +19,15 @@ use tokio::sync::{Mutex, RwLock};
 
 const API_BASES: [&str; 2] = ["https://www.ldxp.cn", "https://pay.ldxp.cn"];
 const SHOP_BASE: &str = "https://pay.ldxp.cn";
-const REFRESH_SECONDS: i64 = 3 * 60;
-const REQUEST_SPACING_MS: i64 = 750;
-const MANUAL_COOLDOWN_SECONDS: i64 = 3 * 60;
+const REFRESH_SECONDS: i64 = 90;
+const REQUEST_SPACING_MS: i64 = 300;
+const MANUAL_COOLDOWN_SECONDS: i64 = 30;
 const PROFILE_CACHE_SECONDS: i64 = 60 * 60;
 const FEE_CACHE_SECONDS: i64 = 6 * 60 * 60;
-const MAX_BACKOFF_SECONDS: i64 = 60 * 60;
-const BOOTSTRAP_RECOVERY_SECONDS: i64 = 30;
+const MAX_BACKOFF_SECONDS: i64 = 30 * 60;
+const BOOTSTRAP_RECOVERY_SECONDS: i64 = 20;
 const PAGE_SIZE: i64 = 200;
+const SHOP_CONCURRENCY: usize = 3;
 
 #[derive(Debug)]
 pub struct MarketState {
@@ -169,6 +170,8 @@ impl MarketState {
                 .unwrap_or(false)
         });
 
+        let shared_protection = Arc::new(tokio::sync::Mutex::new(protection.clone()));
+
         let previous_by_id = previous
             .products
             .iter()
@@ -189,9 +192,11 @@ impl MarketState {
         let mut products = Vec::new();
         let mut shops = Vec::new();
         let mut successful_tokens = HashSet::new();
-        let mut attempted_store_count = 0_usize;
+        let attempted_store_count;
         let mut events = Vec::new();
 
+        // Separate shops into disabled/blocked (sequential) and fetchable (parallel)
+        let mut fetchable: Vec<MarketShop> = Vec::new();
         for configured in previous.shops.clone() {
             if !configured.enabled {
                 let mut disabled = configured;
@@ -242,100 +247,123 @@ impl MarketState {
                 shops.push(configured);
                 continue;
             }
+            fetchable.push(configured);
+        }
 
-            attempted_store_count += 1;
-            match self.fetch_shop(configured.clone(), &mut protection).await {
-                Ok((mut shop, fetched)) => {
-                    successful_tokens.insert(shop.token.clone());
-                    let fetched = fetched
-                        .into_iter()
-                        .map(|mut item| {
-                            if let Some(old) = previous_by_id.get(&item.id) {
-                                item.first_seen_at = old.first_seen_at.clone();
+        // Fetch shops concurrently with bounded parallelism
+        attempted_store_count = fetchable.len();
+        {
+            use futures::stream::{self, StreamExt};
+            let results: Vec<(MarketShop, Result<(MarketShop, Vec<MarketProduct>), String>)> =
+                stream::iter(fetchable.into_iter().map(|configured| {
+                    let state = self;
+                    let prot = Arc::clone(&shared_protection);
+                    async move {
+                        let result = state.fetch_shop(configured.clone(), &prot).await;
+                        (configured, result)
+                    }
+                }))
+                .buffer_unordered(SHOP_CONCURRENCY)
+                .collect()
+                .await;
+
+            for (configured, result) in results {
+                match result {
+                    Ok((mut shop, fetched)) => {
+                        successful_tokens.insert(shop.token.clone());
+                        let fetched = fetched
+                            .into_iter()
+                            .map(|mut item| {
+                                if let Some(old) = previous_by_id.get(&item.id) {
+                                    item.first_seen_at = old.first_seen_at.clone();
+                                }
+                                item
+                            })
+                            .collect::<Vec<_>>();
+                        let fetched_ids = fetched
+                            .iter()
+                            .map(|item| item.id.clone())
+                            .collect::<HashSet<_>>();
+                        products.extend(fetched);
+                        for mut old in previous_by_shop
+                            .get(&shop.token)
+                            .cloned()
+                            .unwrap_or_default()
+                        {
+                            if fetched_ids.contains(&old.id) {
+                                continue;
                             }
-                            item
-                        })
-                        .collect::<Vec<_>>();
-                    let fetched_ids = fetched
-                        .iter()
-                        .map(|item| item.id.clone())
-                        .collect::<HashSet<_>>();
-                    products.extend(fetched);
-                    for mut old in previous_by_shop
-                        .get(&shop.token)
-                        .cloned()
-                        .unwrap_or_default()
-                    {
-                        if fetched_ids.contains(&old.id) {
-                            continue;
+                            old.missing_count += 1;
+                            if old.missing_count < 2 {
+                                products.push(old);
+                            } else {
+                                events.push(product_event(
+                                    "product.unavailable",
+                                    &old,
+                                    "商品确认缺货",
+                                    format!(
+                                        "{} · {} · 原库存 {}",
+                                        old.name, old.shop_name, old.stock_count
+                                    ),
+                                    "warning",
+                                ));
+                            }
                         }
-                        old.missing_count += 1;
-                        if old.missing_count < 2 {
-                            products.push(old);
-                        } else {
-                            events.push(product_event(
-                                "product.unavailable",
-                                &old,
-                                "商品确认缺货",
-                                format!(
-                                    "{} · {} · 原库存 {}",
-                                    old.name, old.shop_name, old.stock_count
-                                ),
-                                "warning",
+                        let shop_products =
+                            products.iter().filter(|item| item.shop_token == shop.token);
+                        shop.product_count = shop_products.clone().count() as i64;
+                        shop.total_stock = shop_products.map(|item| item.stock_count).sum();
+                        if configured.failure_count >= 3 {
+                            events.push(store_event(
+                                "store.recovered",
+                                &shop,
+                                "店铺已恢复",
+                                format!("{} 已恢复正常采集", shop.name),
+                                "success",
                             ));
                         }
+                        shops.push(shop);
                     }
-                    let shop_products =
-                        products.iter().filter(|item| item.shop_token == shop.token);
-                    shop.product_count = shop_products.clone().count() as i64;
-                    shop.total_stock = shop_products.map(|item| item.stock_count).sum();
-                    if configured.failure_count >= 3 {
-                        events.push(store_event(
-                            "store.recovered",
-                            &shop,
-                            "店铺已恢复",
-                            format!("{} 已恢复正常采集", shop.name),
-                            "success",
-                        ));
+                    Err(error) => {
+                        let mut failed = configured.clone();
+                        failed.ok = false;
+                        failed.failure_count += 1;
+                        failed.error = Some(error.chars().take(180).collect());
+                        let backoff = if has_usable_snapshot {
+                            (REFRESH_SECONDS * 2_i64.pow((failed.failure_count - 1).clamp(0, 5) as u32))
+                                .min(MAX_BACKOFF_SECONDS)
+                        } else {
+                            BOOTSTRAP_RECOVERY_SECONDS
+                        };
+                        failed.blocked_until =
+                            Some((Utc::now() + ChronoDuration::seconds(backoff)).to_rfc3339());
+                        products.extend(
+                            previous_by_shop
+                                .get(&failed.token)
+                                .cloned()
+                                .unwrap_or_default(),
+                        );
+                        if failed.failure_count == 3 {
+                            events.push(store_event(
+                                "store.degraded",
+                                &failed,
+                                "店铺连续采集失败",
+                                format!(
+                                    "{} · {}",
+                                    failed.name,
+                                    failed.error.clone().unwrap_or_default()
+                                ),
+                                "high",
+                            ));
+                        }
+                        shops.push(failed);
                     }
-                    shops.push(shop);
-                }
-                Err(error) => {
-                    let mut failed = configured.clone();
-                    failed.ok = false;
-                    failed.failure_count += 1;
-                    failed.error = Some(error.chars().take(180).collect());
-                    let backoff = if has_usable_snapshot {
-                        (REFRESH_SECONDS * 2_i64.pow((failed.failure_count - 1).clamp(0, 5) as u32))
-                            .min(MAX_BACKOFF_SECONDS)
-                    } else {
-                        BOOTSTRAP_RECOVERY_SECONDS
-                    };
-                    failed.blocked_until =
-                        Some((Utc::now() + ChronoDuration::seconds(backoff)).to_rfc3339());
-                    products.extend(
-                        previous_by_shop
-                            .get(&failed.token)
-                            .cloned()
-                            .unwrap_or_default(),
-                    );
-                    if failed.failure_count == 3 {
-                        events.push(store_event(
-                            "store.degraded",
-                            &failed,
-                            "店铺连续采集失败",
-                            format!(
-                                "{} · {}",
-                                failed.name,
-                                failed.error.clone().unwrap_or_default()
-                            ),
-                            "high",
-                        ));
-                    }
-                    shops.push(failed);
                 }
             }
         }
+
+        // Extract final protection state
+        let mut protection = shared_protection.lock().await.clone();
 
         products.sort_by(|a, b| {
             a.total_price
@@ -345,14 +373,17 @@ impl MarketState {
         products.dedup_by(|a, b| a.id == b.id);
         if !baseline {
             for product in &products {
-                if !previous_by_id.contains_key(&product.id) && product.missing_count == 0 {
+                // Only generate arrival events for focus categories (K12, GPT Plus, BUG TEAM)
+                let is_focus = product.category.as_deref().is_some_and(|c| c == "k12" || c == "gptplus" || c == "bugteam");
+                if !previous_by_id.contains_key(&product.id) && product.missing_count == 0 && is_focus {
                     events.push(product_event(
                         "product.available",
                         product,
-                        if product.category.as_deref() == Some("bugteam") {
-                            "BUG TEAM 到货"
-                        } else {
-                            "商品到货"
+                        match product.category.as_deref() {
+                            Some("bugteam") => "BUG TEAM 到货",
+                            Some("k12") => "K12 到货",
+                            Some("gptplus") => "GPT Plus 到货",
+                            _ => "商品到货",
                         },
                         format!(
                             "{} · {} · 库存 {} · 到手价 ¥{}",
@@ -384,7 +415,7 @@ impl MarketState {
                 .is_some_and(|until| until > Utc::now());
             if !circuit_active && protection.consecutive_failures >= 3 && has_usable_snapshot {
                 protection.circuit_open_until =
-                    Some((Utc::now() + ChronoDuration::minutes(30)).to_rfc3339());
+                    Some((Utc::now() + ChronoDuration::minutes(10)).to_rfc3339());
                 protection.circuit_reason = Some("连续刷新失败".to_string());
             }
         }
@@ -490,7 +521,7 @@ impl MarketState {
     async fn fetch_shop(
         &self,
         mut shop: MarketShop,
-        protection: &mut MarketProtection,
+        protection: &Arc<tokio::sync::Mutex<MarketProtection>>,
     ) -> Result<(MarketShop, Vec<MarketProduct>), String> {
         let now = Utc::now();
         let previous_fee_payer = shop.fee_payer;
@@ -632,25 +663,31 @@ impl MarketState {
         &self,
         path: &str,
         body: Value,
-        protection: &mut MarketProtection,
+        protection: &Arc<tokio::sync::Mutex<MarketProtection>>,
         optional: bool,
     ) -> Result<Value, String> {
-        if protection
-            .circuit_open_until
-            .as_deref()
-            .and_then(parse_time)
-            .is_some_and(|until| until > Utc::now())
         {
-            return Err(protection
-                .circuit_reason
-                .clone()
-                .unwrap_or_else(|| "接口保护冷却中".to_string()));
+            let guard = protection.lock().await;
+            if guard
+                .circuit_open_until
+                .as_deref()
+                .and_then(parse_time)
+                .is_some_and(|until| until > Utc::now())
+            {
+                return Err(guard
+                    .circuit_reason
+                    .clone()
+                    .unwrap_or_else(|| "接口保护冷却中".to_string()));
+            }
         }
         let mut attempts = Vec::new();
-        let active = if API_BASES.contains(&protection.active_api_base.as_str()) {
-            protection.active_api_base.clone()
-        } else {
-            API_BASES[0].to_string()
+        let active = {
+            let guard = protection.lock().await;
+            if API_BASES.contains(&guard.active_api_base.as_str()) {
+                guard.active_api_base.clone()
+            } else {
+                API_BASES[0].to_string()
+            }
         };
         let mut bases = vec![active.clone()];
         bases.extend(
@@ -661,18 +698,23 @@ impl MarketState {
         );
 
         for base in bases {
-            if let Some(last) = protection.last_request_at.as_deref().and_then(parse_time) {
-                let elapsed = (Utc::now() - last).num_milliseconds();
-                if elapsed < REQUEST_SPACING_MS {
-                    tokio::time::sleep(Duration::from_millis(
-                        (REQUEST_SPACING_MS - elapsed) as u64,
-                    ))
-                    .await;
+            {
+                let guard = protection.lock().await;
+                if let Some(last) = guard.last_request_at.as_deref().and_then(parse_time) {
+                    let elapsed = (Utc::now() - last).num_milliseconds();
+                    if elapsed < REQUEST_SPACING_MS {
+                        let wait_ms = (REQUEST_SPACING_MS - elapsed) as u64;
+                        drop(guard);
+                        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                    }
                 }
             }
             let request_at = Utc::now().to_rfc3339();
-            protection.last_request_at = Some(request_at.clone());
-            protection.request_timestamps.push(request_at);
+            {
+                let mut guard = protection.lock().await;
+                guard.last_request_at = Some(request_at.clone());
+                guard.request_timestamps.push(request_at);
+            }
             self.checkpoint_protection(protection, false).await;
             let mut headers = HeaderMap::new();
             headers.insert(
@@ -704,7 +746,7 @@ impl MarketState {
                 .post(format!("{base}{path}"))
                 .headers(headers)
                 .json(&body)
-                .timeout(Duration::from_secs(20))
+                .timeout(Duration::from_secs(15))
                 .send()
                 .await
             {
@@ -747,21 +789,24 @@ impl MarketState {
                     string_value(&payload["msg"]).unwrap_or_else(|| "商品接口返回错误".to_string())
                 );
             }
-            protection.active_api_base = base.clone();
-            protection.fallback_used = base != API_BASES[0];
+            {
+                let mut guard = protection.lock().await;
+                guard.active_api_base = base.clone();
+                guard.fallback_used = base != API_BASES[0];
+            }
             return Ok(payload["data"].clone());
         }
 
         let joined = attempts.join(" / ");
         let has_usable_snapshot = !self.snapshot.read().await.products.is_empty();
         let (protected_duration, reason) = if joined.contains("429") {
-            (ChronoDuration::minutes(30), "主备商品接口均返回 429")
+            (ChronoDuration::minutes(15), "主备商品接口均返回 429")
         } else if joined.contains("403") {
-            (ChronoDuration::hours(2), "主备商品接口均返回 403")
+            (ChronoDuration::hours(1), "主备商品接口均返回 403")
         } else if joined.contains("安全校验") {
-            (ChronoDuration::minutes(3), "主备商品接口触发安全校验")
+            (ChronoDuration::minutes(2), "主备商品接口触发安全校验")
         } else {
-            (ChronoDuration::minutes(3), "主备商品接口暂时不可用")
+            (ChronoDuration::minutes(2), "主备商品接口暂时不可用")
         };
         if !optional {
             let duration = if has_usable_snapshot {
@@ -769,9 +814,11 @@ impl MarketState {
             } else {
                 ChronoDuration::seconds(BOOTSTRAP_RECOVERY_SECONDS)
             };
-            protection.circuit_open_until = Some((Utc::now() + duration).to_rfc3339());
-            protection.circuit_reason = Some(reason.to_string());
-            protection.mode = "circuit-open".to_string();
+            let mut guard = protection.lock().await;
+            guard.circuit_open_until = Some((Utc::now() + duration).to_rfc3339());
+            guard.circuit_reason = Some(reason.to_string());
+            guard.mode = "circuit-open".to_string();
+            drop(guard);
             self.checkpoint_protection(protection, true).await;
             Err(format!("{reason}，已保留上次成功数据"))
         } else {
@@ -797,13 +844,14 @@ impl MarketState {
         }
     }
 
-    async fn checkpoint_protection(&self, protection: &MarketProtection, force: bool) {
+    async fn checkpoint_protection(&self, protection: &Arc<tokio::sync::Mutex<MarketProtection>>, force: bool) {
         let mut checkpoint = self.protection_checkpoint.lock().await;
         if !force && checkpoint.is_some_and(|previous| previous.elapsed() < Duration::from_secs(5))
         {
             return;
         }
-        match self.database.checkpoint_protection(protection) {
+        let snapshot = protection.lock().await.clone();
+        match self.database.checkpoint_protection(&snapshot) {
             Ok(()) => *checkpoint = Some(Instant::now()),
             Err(error) => tracing::warn!(%error, "保存市场请求保护检查点失败"),
         }
@@ -897,7 +945,7 @@ fn add_market_signal_events(
     } else {
         0.0
     };
-    if !previous.is_empty() && increase >= 10.max((previous_stock as f64 * 0.2).ceil() as i64) {
+    if !previous.is_empty() && increase >= 20.max((previous_stock as f64 * 0.35).ceil() as i64) {
         output.push(MarketEvent {
             seq: 0,
             event_id: format!("stock-surge:{}:{}", Utc::now().timestamp() / 180, current_stock),
@@ -921,6 +969,10 @@ fn add_market_signal_events(
         let Some(category) = product.category.as_ref() else {
             continue;
         };
+        // Only generate price signals for focus categories
+        if category != "k12" && category != "gptplus" && category != "bugteam" {
+            continue;
+        }
         let Some(profile) = profiles.get(category) else {
             continue;
         };
@@ -1141,7 +1193,13 @@ fn should_notify(event: &MarketEvent, settings: &MarketAlertSettings) -> bool {
     }
     match event.kind.as_str() {
         "product.available" => {
-            settings.bug_team_available && event.payload["category"].as_str() == Some("bugteam")
+            let category = event.payload["category"].as_str().unwrap_or_default();
+            match category {
+                "bugteam" => settings.bug_team_available,
+                // K12 and GPT Plus arrivals always notify when alerts enabled
+                "k12" | "gptplus" => true,
+                _ => false,
+            }
         }
         "product.unavailable" => settings.product_unavailable,
         "store.degraded" | "store.recovered" => settings.store_health,

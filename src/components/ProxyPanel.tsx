@@ -85,7 +85,6 @@ export function ProxyPanel({
           <div className="stat-item">
             <span className="stat-label">累计请求</span>
             <span className="stat-value">{totalRequests.toLocaleString()}</span>
-            <span className="stat-detail stat-support">运行期间累计</span>
           </div>
           <div className="stat-item stat-tokens" data-tooltip={tokenBreakdownTitle}>
             <span className="stat-label">总 Tokens</span>
@@ -95,19 +94,10 @@ export function ProxyPanel({
               <span>输出 {formatTokenCount(outputTokens)}</span>
               {reasoningTokens > 0 && <span>推理 {formatTokenCount(reasoningTokens)}</span>}
             </span>
-            <span className="stat-detail token-breakdown token-cache">
-              <span>缓存读 {formatTokenCount(cachedTokens)}</span>
-              <span>缓存写 {formatTokenCount(cacheWriteTokens)}</span>
-            </span>
           </div>
           <div className="stat-item stat-cost" data-tooltip={costEstimateTitle}>
             <span className="stat-label stat-tooltip">估算费用</span>
             <span className="stat-value">{formatEstimatedCost(totalCost)}</span>
-            <span className={`stat-detail stat-support${unpricedTokens > 0 ? ' unpriced-note' : ''}`}>
-              {unpricedTokens > 0
-                ? `${formatTokenCount(unpricedTokens)} Token 未计价`
-                : '基于模型 Token 用量'}
-            </span>
           </div>
           <button
             type="button"
