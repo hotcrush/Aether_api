@@ -65,6 +65,18 @@ pub struct NewAccount {
     pub auto_sync_rate_multiplier: Option<bool>,
 }
 
+#[derive(Debug, Clone)]
+pub struct AccountUpdate {
+    pub name: String,
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub models: Vec<String>,
+    pub priority: i64,
+    pub weight: i64,
+    pub concurrency: i64,
+    pub rate_multiplier: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertAction {
     Created,

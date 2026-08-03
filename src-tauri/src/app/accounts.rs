@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::account_import::{ImportMessage, ImportResult};
-use crate::db::{Account, NewAccount, UpsertAction};
+use crate::db::{normalize_models, Account, AccountUpdate, NewAccount, UpsertAction};
 use crate::{logger, oauth};
 use axum::extract::{Query, State};
 use axum::response::{Html, IntoResponse};
@@ -71,6 +71,84 @@ pub(crate) fn set_account_status(
         .db
         .set_status(&id, &status)
         .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AccountUpdatePayload {
+    name: String,
+    api_key: Option<String>,
+    base_url: String,
+    models: Vec<String>,
+    priority: i64,
+    weight: i64,
+    concurrency: i64,
+    rate_multiplier: f64,
+}
+
+#[tauri::command]
+pub(crate) fn update_account(
+    state: tauri::State<AppState>,
+    id: String,
+    update: AccountUpdatePayload,
+) -> Result<Account, String> {
+    let name = update.name.trim();
+    if name.is_empty() {
+        return Err("请输入账号名称".to_string());
+    }
+    if name.chars().count() > 100 {
+        return Err("账号名称不能超过 100 个字符".to_string());
+    }
+    if !(0..=1000).contains(&update.priority) {
+        return Err("优先级必须在 0 到 1000 之间".to_string());
+    }
+    if !(1..=1000).contains(&update.weight) {
+        return Err("权重必须在 1 到 1000 之间".to_string());
+    }
+    if !(1..=1000).contains(&update.concurrency) {
+        return Err("容量必须在 1 到 1000 之间".to_string());
+    }
+    if !update.rate_multiplier.is_finite() || !(0.0..=100.0).contains(&update.rate_multiplier) {
+        return Err("成本倍率必须在 0 到 100 之间".to_string());
+    }
+    let current = state
+        .db
+        .get_account(&id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "上游不存在".to_string())?;
+    if current.account_type == "api_key" {
+        if update
+            .api_key
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err("新 API Key 不能为空；留空表示保持原 Key".to_string());
+        }
+        let base_url = update.base_url.trim();
+        if !base_url.is_empty() {
+            let url =
+                reqwest::Url::parse(base_url).map_err(|error| format!("Base URL 无效: {error}"))?;
+            if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+                return Err("Base URL 必须是有效的 HTTP(S) 地址".to_string());
+            }
+        }
+    }
+    state
+        .db
+        .update_account(
+            &id,
+            &AccountUpdate {
+                name: name.to_string(),
+                api_key: update.api_key.map(|value| value.trim().to_string()),
+                base_url: update.base_url.trim().to_string(),
+                models: normalize_models(update.models),
+                priority: update.priority,
+                weight: update.weight,
+                concurrency: update.concurrency,
+                rate_multiplier: update.rate_multiplier,
+            },
+        )
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "上游不存在".to_string())
 }
 
 #[tauri::command]

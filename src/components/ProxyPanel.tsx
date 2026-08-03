@@ -180,9 +180,16 @@ function summarizeQuota(
     summary.relayEligible += 1
     const state = relayUsageStates[account.id]
     if (state?.status !== 'success') continue
-    const limit = finiteNumber(state.usage.quota_limit)
-    const used = finiteNumber(state.usage.quota_used)
-    const explicitRemaining = finiteNumber(state.usage.remaining)
+    const quotaFactor = state.usage.unit === 'quota'
+      ? finiteNumber(state.usage.quota_per_unit ?? null)
+      : 1
+    if (quotaFactor === null || quotaFactor <= 0) continue
+    const rawLimit = finiteNumber(state.usage.quota_limit)
+    const rawUsed = finiteNumber(state.usage.quota_used)
+    const rawRemaining = finiteNumber(state.usage.remaining)
+    const limit = rawLimit === null ? null : rawLimit / quotaFactor
+    const used = rawUsed === null ? null : rawUsed / quotaFactor
+    const explicitRemaining = rawRemaining === null ? null : rawRemaining / quotaFactor
     if (limit === null || limit <= 0 || (used === null && explicitRemaining === null)) continue
     summary.relayKnown += 1
     summary.relayTotal += limit

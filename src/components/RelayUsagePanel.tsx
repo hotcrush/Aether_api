@@ -59,7 +59,7 @@ function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuer
             className="relay-cost-value"
             data-tooltip={amountTooltip(usage.quota_used, usage, amountUnit)}
           >
-            {formatAmount(usage.quota_used, 2, true)}
+            {formatAmount(usage.quota_used, 2, true, usage.quota_per_unit)}
           </strong>
           <button
             className="quota-refresh relay-inline-refresh"
@@ -76,7 +76,9 @@ function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuer
             className="relay-cost-value"
             data-tooltip={usage.unlimited_quota ? undefined : amountTooltip(usage.remaining, usage, amountUnit)}
           >
-            {usage.unlimited_quota ? '无限制' : formatAmount(usage.remaining, 2, true)}
+            {usage.unlimited_quota
+              ? '无限制'
+              : formatAmount(usage.remaining, 2, true, usage.quota_per_unit)}
           </strong>
         </div>
       </div>
@@ -90,7 +92,7 @@ function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuer
           className="relay-cost-value"
           data-tooltip={amountTooltip(usage.today_actual_cost, usage, amountUnit)}
         >
-          {formatAmount(usage.today_actual_cost, 4, isQuotaUnit)}
+          {formatAmount(usage.today_actual_cost, 4, isQuotaUnit, usage.quota_per_unit)}
         </strong>
         <button
           className="quota-refresh relay-inline-refresh"
@@ -107,7 +109,7 @@ function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuer
           className="relay-cost-value"
           data-tooltip={amountTooltip(cost30d, usage, amountUnit)}
         >
-          {formatAmount(cost30d, 4, isQuotaUnit)}
+          {formatAmount(cost30d, 4, isQuotaUnit, usage.quota_per_unit)}
         </strong>
       </div>
       {quota ? (
@@ -118,7 +120,7 @@ function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuer
               className={`relay-cost-value ${quota.tone}`}
               data-tooltip={`单位：${amountUnit}`}
             >
-              {formatAmount(quota.used, 2, isQuotaUnit)} / {formatAmount(quota.limit, 2, isQuotaUnit)}
+              {formatAmount(quota.used, 2, isQuotaUnit, usage.quota_per_unit)} / {formatAmount(quota.limit, 2, isQuotaUnit, usage.quota_per_unit)}
             </strong>
           </div>
           <div className={`relay-quota-track ${quota.tone}`}>
@@ -133,12 +135,12 @@ function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuer
       ) : usage.balance !== null ? (
         <div className="relay-cost-line">
           <span className="relay-cost-label">余额</span>
-          <strong className="relay-cost-value">{formatAmount(usage.balance, 2, isQuotaUnit)}</strong>
+          <strong className="relay-cost-value">{formatAmount(usage.balance, 2, isQuotaUnit, usage.quota_per_unit)}</strong>
         </div>
       ) : usage.remaining !== null ? (
         <div className="relay-cost-line">
           <span className="relay-cost-label">可用</span>
-          <strong className="relay-cost-value">{formatAmount(usage.remaining, 2, isQuotaUnit)}</strong>
+          <strong className="relay-cost-value">{formatAmount(usage.remaining, 2, isQuotaUnit, usage.quota_per_unit)}</strong>
         </div>
       ) : null}
       {(requestCount !== null || usage.remote_last_model || lastRequestAt) && (
@@ -181,10 +183,18 @@ function finiteCount(value: number | null | undefined) {
     : null
 }
 
-function formatAmount(value: number | null, digits: number, quotaUnit: boolean) {
+function formatAmount(
+  value: number | null,
+  digits: number,
+  quotaUnit: boolean,
+  quotaPerUnit?: number | null,
+) {
   const amount = finiteNumber(value)
   if (amount === null) return '-'
   if (!quotaUnit) return `$${amount.toFixed(digits)}`
+  if (typeof quotaPerUnit === 'number' && Number.isFinite(quotaPerUnit) && quotaPerUnit > 0) {
+    return `≈$${(amount / quotaPerUnit).toFixed(digits)}`
+  }
   if (Math.abs(amount) >= 1_000_000) return `${(amount / 1_000_000).toFixed(2)}M`
   if (Math.abs(amount) >= 1_000) return `${(amount / 1_000).toFixed(1)}K`
   return amount.toFixed(digits)

@@ -10,6 +10,7 @@ import { CodexSettingsPanel } from './components/CodexSettingsPanel'
 import { ChannelMonitorPanel } from './components/ChannelMonitorPanel'
 import { DeleteAccountDialog } from './components/DeleteAccountDialog'
 import { DailyBudgetDialog } from './components/DailyBudgetDialog'
+import { EditAccountDialog } from './components/EditAccountDialog'
 import { ImportDialog } from './components/ImportDialog'
 import { LoggerPage } from './components/LoggerPage'
 import { MarketMonitorPage, type MarketSection } from './components/MarketMonitorPage'
@@ -150,6 +151,7 @@ export default function App() {
   const [importFiles, setImportFiles] = useState<File[]>([])
   const [clipboardCandidates, setClipboardCandidates] = useState<ClipboardImportCandidate[]>([])
   const [relayOpen, setRelayOpen] = useState(false)
+  const [editTarget, setEditTarget] = useState<Account | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   const [resetKeyOpen, setResetKeyOpen] = useState(false)
   const [trashOpen, setTrashOpen] = useState(false)
@@ -1406,6 +1408,7 @@ export default function App() {
           onRetry={retryLoad}
           onToggle={(account) => runAccountAction('toggle', account)}
           onTest={(account) => runAccountAction('test', account)}
+          onEdit={setEditTarget}
           onOpenRelay={openRelayWebsite}
           onRefresh={(account) => runAccountAction('refresh', account)}
           onQuota={queryQuota}
@@ -1480,6 +1483,12 @@ export default function App() {
       <ApiKeyDialog
         open={relayOpen}
         onClose={() => setRelayOpen(false)}
+        onSaved={refreshData}
+        notify={notify}
+      />
+      <EditAccountDialog
+        account={editTarget}
+        onClose={() => setEditTarget(null)}
         onSaved={refreshData}
         notify={notify}
       />
@@ -1571,6 +1580,15 @@ function mergeQuotaSnapshot(
     rate_limit_reset_credits:
       patch.rate_limit_reset_credits ?? current?.rate_limit_reset_credits ?? null,
     fetched_at: patch.fetched_at ?? current?.fetched_at ?? Date.now(),
+    estimated_limit_usd: patch.estimated_limit_usd ?? current?.estimated_limit_usd ?? null,
+    estimated_limit_window:
+      patch.estimated_limit_window ?? current?.estimated_limit_window ?? null,
+    estimated_sample_cost_usd:
+      patch.estimated_sample_cost_usd ?? current?.estimated_sample_cost_usd ?? null,
+    estimated_sample_requests:
+      patch.estimated_sample_requests ?? current?.estimated_sample_requests ?? null,
+    estimated_sample_used_percent:
+      patch.estimated_sample_used_percent ?? current?.estimated_sample_used_percent ?? null,
   }
 }
 

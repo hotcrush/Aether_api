@@ -1,4 +1,4 @@
-use super::types::{default_weight, Account, NewAccount, UpsertAction};
+use super::types::{default_weight, Account, AccountUpdate, NewAccount, UpsertAction};
 use super::Db;
 use rusqlite::{Connection, OptionalExtension, Result as SqlResult};
 use serde_json::{json, Value};
@@ -289,6 +289,106 @@ impl Db {
             "UPDATE accounts SET status = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?2",
             rusqlite::params![status, id],
         )? > 0)
+    }
+
+    pub fn update_account(&self, id: &str, update: &AccountUpdate) -> SqlResult<Option<Account>> {
+        validate_weight(Some(update.weight))?;
+        validate_concurrency(Some(update.concurrency))?;
+        validate_rate_multiplier(Some(update.rate_multiplier))?;
+        let conn = self.conn.lock().unwrap();
+        let current = conn
+            .query_row(
+                "SELECT account_type, api_key, base_url, models, rate_multiplier,
+                        auto_sync_rate_multiplier
+                   FROM accounts WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, f64>(4)?,
+                        row.get::<_, bool>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            account_type,
+            current_key,
+            current_base_url,
+            current_models,
+            current_multiplier,
+            auto_sync,
+        )) = current
+        else {
+            return Ok(None);
+        };
+
+        let relay = account_type == "api_key";
+        let api_key = if relay {
+            update
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(&current_key)
+                .to_string()
+        } else {
+            current_key
+        };
+        let base_url = if relay {
+            normalize_base_url(&update.base_url)
+        } else {
+            current_base_url
+        };
+        let models = if relay {
+            models_to_storage(&update.models)
+        } else {
+            current_models
+        };
+        if relay {
+            let duplicate = conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM accounts
+                     WHERE id <> ?1 AND deleted_at IS NULL AND account_type = 'api_key'
+                       AND api_key = ?2 AND RTRIM(TRIM(base_url), '/') = ?3
+                 )",
+                rusqlite::params![id, api_key, base_url],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if duplicate {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "相同 API Key 和 Base URL 的中转站已存在".to_string(),
+                ));
+            }
+        }
+        let rate_multiplier = if auto_sync {
+            current_multiplier
+        } else {
+            update.rate_multiplier
+        };
+        conn.execute(
+            "UPDATE accounts SET
+                name = ?2, api_key = ?3, base_url = ?4, models = ?5,
+                priority = ?6, weight = ?7, concurrency = ?8, rate_multiplier = ?9,
+                last_error = '', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              WHERE id = ?1 AND deleted_at IS NULL",
+            rusqlite::params![
+                id,
+                update.name.trim(),
+                api_key,
+                base_url,
+                models,
+                update.priority,
+                update.weight,
+                update.concurrency,
+                rate_multiplier,
+            ],
+        )?;
+        drop(conn);
+        self.get_account(id)
     }
 
     pub fn set_priority(&self, id: &str, priority: i64) -> SqlResult<bool> {

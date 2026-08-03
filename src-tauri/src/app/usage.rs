@@ -1,5 +1,5 @@
 use super::AppState;
-use crate::db::Account;
+use crate::db::{Account, Db};
 use crate::{oauth, quota, relay_usage};
 use futures::StreamExt;
 use tracing::warn;
@@ -47,7 +47,7 @@ async fn query_quota_for_id(
 ) -> Result<quota::QuotaUsage, String> {
     let account = account_for_quota(state, id).await?;
     let client = state.client.load_full();
-    let usage = match quota::query_usage(&client, &account).await {
+    let mut usage = match quota::query_usage(&client, &account).await {
         Ok(usage) => usage,
         Err(error) if error.status == Some(401) && !account.refresh_token.is_empty() => {
             let refreshed = oauth::refresh_account(&client, &account).await?;
@@ -61,6 +61,9 @@ async fn query_quota_for_id(
         }
         Err(error) => return Err(error.to_string()),
     };
+    if let Err(error) = attach_estimated_limit(&state.db, &account, &mut usage) {
+        warn!(account_id = id, %error, "测算账号额度失败");
+    }
     match quota::full_cache_entry_json(&usage) {
         Ok(entry) => {
             if let Err(error) = state
@@ -77,6 +80,86 @@ async fn query_quota_for_id(
         Err(error) => warn!(account_id = id, %error, "序列化额度缓存失败"),
     }
     Ok(usage)
+}
+
+fn attach_estimated_limit(
+    db: &Db,
+    account: &Account,
+    usage: &mut quota::QuotaUsage,
+) -> Result<(), String> {
+    let mut windows = quota_estimate_windows(usage);
+    windows.sort_by(|left, right| right.1.cmp(&left.1));
+
+    for (window, duration) in windows {
+        let used_percent = window
+            .used_percent
+            .or_else(|| window.remaining_percent.map(|remaining| 100.0 - remaining))
+            .map(|value| value.clamp(0.0, 100.0));
+        let Some(used_percent) = used_percent.filter(|value| *value >= 1.0) else {
+            continue;
+        };
+        let reset_at = window.reset_at.filter(|value| *value > 0).or_else(|| {
+            window
+                .reset_after_seconds
+                .filter(|value| *value >= 0)
+                .map(|value| usage.fetched_at.saturating_add(value))
+        });
+        let Some(window_started_at) = reset_at.map(|value| value.saturating_sub(duration)) else {
+            continue;
+        };
+        let (request_count, sample_cost) = db
+            .account_estimated_cost_since(&account.id, window_started_at)
+            .map_err(|error| error.to_string())?;
+        if request_count <= 0 || !sample_cost.is_finite() || sample_cost <= 0.0 {
+            continue;
+        }
+        let estimated_limit = sample_cost * 100.0 / used_percent;
+        if !estimated_limit.is_finite() || estimated_limit <= 0.0 {
+            continue;
+        }
+        usage.estimated_limit_usd = Some(estimated_limit);
+        usage.estimated_limit_window =
+            Some(if duration <= 21_600 { "5h" } else { "7d" }.to_string());
+        usage.estimated_sample_cost_usd = Some(sample_cost);
+        usage.estimated_sample_requests = Some(request_count);
+        usage.estimated_sample_used_percent = Some(used_percent);
+        break;
+    }
+    Ok(())
+}
+
+fn quota_estimate_windows(usage: &quota::QuotaUsage) -> Vec<(quota::RateLimitWindow, i64)> {
+    fn from_limit(limit: Option<&quota::RateLimit>) -> Vec<(quota::RateLimitWindow, i64)> {
+        let Some(limit) = limit else {
+            return Vec::new();
+        };
+        [
+            (limit.primary_window.as_ref(), 604_800),
+            (limit.secondary_window.as_ref(), 18_000),
+        ]
+        .into_iter()
+        .filter_map(|(window, fallback)| {
+            let window = window?;
+            let duration = window
+                .limit_window_seconds
+                .filter(|value| *value > 0)
+                .unwrap_or(fallback);
+            Some((window.clone(), duration))
+        })
+        .collect()
+    }
+
+    let windows = from_limit(usage.rate_limit.as_ref());
+    if !windows.is_empty() {
+        return windows;
+    }
+    for additional in &usage.additional_rate_limits {
+        let windows = from_limit(additional.rate_limit.as_ref());
+        if !windows.is_empty() {
+            return windows;
+        }
+    }
+    Vec::new()
 }
 
 #[tauri::command]

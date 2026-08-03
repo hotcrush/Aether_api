@@ -22,6 +22,47 @@ fn stores_and_updates_account_priority() {
 }
 
 #[test]
+fn edits_existing_relay_and_keeps_secret_when_omitted() {
+    let db = Db::new(Path::new(":memory:")).unwrap();
+    let (account, _) = db
+        .upsert_account(&NewAccount {
+            name: "Before".to_string(),
+            account_type: "api_key".to_string(),
+            api_key: "sk-original".to_string(),
+            base_url: "https://relay.example/v1".to_string(),
+            models: Some(vec!["gpt-5".to_string()]),
+            ..NewAccount::default()
+        })
+        .unwrap();
+
+    let updated = db
+        .update_account(
+            &account.id,
+            &AccountUpdate {
+                name: "After".to_string(),
+                api_key: None,
+                base_url: "https://new-api.example.com/".to_string(),
+                models: vec!["gpt-5.6".to_string()],
+                priority: 3,
+                weight: 4,
+                concurrency: 12,
+                rate_multiplier: 1.25,
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(updated.name, "After");
+    assert_eq!(updated.api_key, "sk-original");
+    assert_eq!(updated.base_url, "https://new-api.example.com");
+    assert_eq!(updated.models, ["gpt-5.6"]);
+    assert_eq!(updated.priority, 3);
+    assert_eq!(updated.weight, 4);
+    assert_eq!(updated.concurrency, 12);
+    assert_eq!(updated.rate_multiplier, 1.25);
+}
+
+#[test]
 fn reimporting_trashed_account_restores_it() {
     let db = Db::new(Path::new(":memory:")).unwrap();
     let imported = NewAccount {

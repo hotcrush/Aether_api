@@ -16,7 +16,7 @@ pub(crate) use request_logs::{
 #[allow(unused_imports)]
 pub use request_logs::{RequestLog, RequestLogOverview, RequestLogPage, RequestLogQuery};
 #[allow(unused_imports)]
-pub use types::{Account, NewAccount, UpsertAction, UsageTotals};
+pub use types::{Account, AccountUpdate, NewAccount, UpsertAction, UsageTotals};
 
 use arc_swap::ArcSwap;
 use rusqlite::{Connection, Result as SqlResult};

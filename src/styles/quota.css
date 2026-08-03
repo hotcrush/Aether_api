@@ -82,6 +82,16 @@
   text-transform: capitalize;
 }
 
+.quota-limit-estimate {
+  color: #24735d;
+  font-weight: 760;
+}
+
+.quota-limit-estimate.pending {
+  color: var(--text-muted);
+  font-weight: 560;
+}
+
 .quota-query,
 .quota-refresh {
   display: flex;

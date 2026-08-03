@@ -452,6 +452,23 @@ impl Db {
         )
     }
 
+    pub fn account_estimated_cost_since(
+        &self,
+        account_id: &str,
+        started_at: i64,
+    ) -> SqlResult<(i64, f64)> {
+        let conn = lock_connection(self);
+        conn.query_row(
+            "SELECT COUNT(DISTINCT request_id), COALESCE(SUM(estimated_cost), 0.0)
+               FROM request_logs
+              WHERE account_id = ?1
+                AND status = 'success'
+                AND created_at >= strftime('%Y-%m-%dT%H:%M:%fZ', ?2, 'unixepoch')",
+            params![account_id, started_at.max(0)],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+    }
+
     pub fn clear_request_logs(&self) -> SqlResult<u64> {
         let conn = lock_connection(self);
         Ok(conn.execute("DELETE FROM request_logs", [])? as u64)

@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   Account,
+  AccountUpdate,
   AccountQuota,
   AccountQuotaResult,
   AccountStatus,
@@ -351,6 +352,11 @@ function previewQuota(accountId: string): AccountQuota {
     email: account.email,
     plan_type: account.plan_type,
     fetched_at: fetchedAt,
+    estimated_limit_usd: accountId === 'oauth-pro' ? 138.6 : 61.4,
+    estimated_limit_window: '7d',
+    estimated_sample_cost_usd: accountId === 'oauth-pro' ? 51.84 : 49.73,
+    estimated_sample_requests: accountId === 'oauth-pro' ? 527 : 213,
+    estimated_sample_used_percent: accountId === 'oauth-pro' ? 37.4 : 81,
     rate_limit_reset_credits: { available_count: accountId === 'oauth-pro' ? 2 : undefined },
     rate_limit: {
       allowed: true,
@@ -485,6 +491,20 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       const target = previewAccounts.find((account) => account.id === args?.id)
       if (target) target.status = args?.status as AccountStatus
       return Boolean(target) as T
+    }
+    case 'update_account': {
+      const target = previewAccounts.find((account) => account.id === args?.id)
+      const update = args?.update as AccountUpdate | undefined
+      if (!target || !update) throw new Error('上游不存在')
+      target.name = update.name
+      target.base_url = target.account_type === 'api_key' ? update.base_url : target.base_url
+      target.models = target.account_type === 'api_key' ? [...update.models] : target.models
+      target.priority = update.priority
+      target.weight = update.weight
+      target.concurrency = update.concurrency
+      if (!target.auto_sync_rate_multiplier) target.rate_multiplier = update.rate_multiplier
+      target.updated_at = new Date().toISOString()
+      return { ...target } as T
     }
     case 'set_account_priority': {
       const target = previewAccounts.find((account) => account.id === args?.id)
@@ -680,6 +700,9 @@ export const openRelaySite = (id: string) =>
 
 export const setAccountStatus = (id: string, status: AccountStatus) =>
   call<boolean>('set_account_status', { id, status })
+
+export const updateAccount = (id: string, update: AccountUpdate) =>
+  call<Account>('update_account', { id, update })
 
 export const setAccountPriority = (id: string, priority: number) =>
   call<boolean>('set_account_priority', { id, priority })

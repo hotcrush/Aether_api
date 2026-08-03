@@ -199,6 +199,7 @@ pub(crate) fn run() {
             super::proxy_settings::set_cache,
             super::proxy_settings::merge_cache_entries,
             super::accounts::set_account_status,
+            super::accounts::update_account,
             super::accounts::set_account_priority,
             super::accounts::set_account_concurrency,
             super::accounts::set_account_rate_multiplier,

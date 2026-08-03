@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, KeyRound, RefreshCw, Trash2 } from 'lucide-react'
+import { Activity, AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, KeyRound, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { formatExpiry } from '../lib/time'
 import type { Account, QuotaQueryState, RelayUsageQueryState } from '../types'
@@ -77,6 +77,7 @@ interface AccountTableProps {
   onToggle: (account: Account) => void
   onTest: (account: Account) => void
   onRefresh: (account: Account) => void
+  onEdit: (account: Account) => void
   onOpenRelay: (account: Account) => void
   onQuota: (account: Account) => void
   onRelayUsage: (account: Account) => void
@@ -101,6 +102,7 @@ export function AccountTable({
   onToggle,
   onTest,
   onRefresh,
+  onEdit,
   onOpenRelay,
   onQuota,
   onRelayUsage,
@@ -146,6 +148,7 @@ export function AccountTable({
                 onToggle={onToggle}
                 onTest={onTest}
                 onRefresh={onRefresh}
+                onEdit={onEdit}
                 onOpenRelay={onOpenRelay}
                 onQuota={onQuota}
                 onRelayUsage={onRelayUsage}
@@ -215,6 +218,7 @@ interface AccountRowProps {
   onToggle: (account: Account) => void
   onTest: (account: Account) => void
   onRefresh: (account: Account) => void
+  onEdit: (account: Account) => void
   onOpenRelay: (account: Account) => void
   onQuota: (account: Account) => void
   onRelayUsage: (account: Account) => void
@@ -235,6 +239,7 @@ function AccountRow({
   onToggle,
   onTest,
   onRefresh,
+  onEdit,
   onOpenRelay,
   onQuota,
   onRelayUsage,
@@ -392,6 +397,14 @@ function AccountRow({
                 : <ExternalLink size={16} />}
             </button>
           )}
+          <button
+            className="icon-btn"
+            onClick={() => onEdit(account)}
+            data-tooltip="编辑账号"
+            aria-label="编辑账号"
+          >
+            <Pencil size={16} />
+          </button>
           <button
             className="icon-btn"
             onClick={() => onDelete(account)}

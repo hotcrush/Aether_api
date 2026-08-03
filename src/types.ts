@@ -35,6 +35,17 @@ export interface Account {
   updated_at: string
 }
 
+export interface AccountUpdate {
+  name: string
+  api_key: string | null
+  base_url: string
+  models: string[]
+  priority: number
+  weight: number
+  concurrency: number
+  rate_multiplier: number
+}
+
 export interface CostGuardSettings {
   enabled: boolean
   max_cost_multiplier: number
@@ -227,6 +238,11 @@ export interface AccountQuota {
   rate_limit_reset_credits?: {
     available_count?: number | null
   } | null
+  estimated_limit_usd?: number | null
+  estimated_limit_window?: '5h' | '7d' | string | null
+  estimated_sample_cost_usd?: number | null
+  estimated_sample_requests?: number | null
+  estimated_sample_used_percent?: number | null
 }
 
 export interface AccountQuotaResult {

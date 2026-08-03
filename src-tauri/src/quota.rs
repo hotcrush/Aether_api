@@ -91,6 +91,16 @@ pub struct QuotaUsage {
     pub rate_limit_reset_credits: Option<RateLimitResetCredits>,
     #[serde(default)]
     pub fetched_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_limit_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_limit_window: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_sample_cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_sample_requests: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_sample_used_percent: Option<f64>,
 }
 
 impl QuotaUsage {
