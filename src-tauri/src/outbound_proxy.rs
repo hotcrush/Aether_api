@@ -69,9 +69,37 @@ pub fn build_client(
     )
 }
 
+/// Convert the configured outbound proxy into the schemes supported by Wry/Tauri WebViews.
+/// WebView2 accepts HTTP and SOCKS5 proxy endpoints; SOCKS5H is normalized because Chromium
+/// resolves hostnames through its SOCKS proxy. HTTPS proxy transport is not supported by Wry.
+pub fn webview_proxy_url(settings: &OutboundProxySettings) -> Result<Option<tauri::Url>, String> {
+    if !settings.enabled {
+        return Ok(None);
+    }
+    let settings = settings.clone().validate()?;
+    let mut url = settings
+        .url
+        .parse::<tauri::Url>()
+        .map_err(|_| "出站代理地址格式无效".to_string())?;
+    match url.scheme() {
+        "http" | "socks5" => {}
+        "socks5h" => {
+            url.set_scheme("socks5")
+                .map_err(|_| "无法为内置授权页启用 SOCKS5 代理".to_string())?;
+        }
+        "https" => {
+            return Err(
+                "内置授权页暂不支持 HTTPS 代理，请改用 HTTP、SOCKS5 或 SOCKS5H 代理".to_string(),
+            )
+        }
+        _ => return Err("内置授权页的代理协议不受支持".to_string()),
+    }
+    Ok(Some(url))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::OutboundProxySettings;
+    use super::{webview_proxy_url, OutboundProxySettings};
 
     #[test]
     fn validates_supported_proxy_urls() {
@@ -93,5 +121,35 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn builds_webview_proxy_urls_without_silent_direct_fallback() {
+        let disabled = OutboundProxySettings::default();
+        assert!(webview_proxy_url(&disabled).unwrap().is_none());
+
+        let http = OutboundProxySettings {
+            enabled: true,
+            url: "http://127.0.0.1:7890".to_string(),
+        };
+        assert_eq!(
+            webview_proxy_url(&http).unwrap().unwrap().as_str(),
+            "http://127.0.0.1:7890/"
+        );
+
+        let socks5h = OutboundProxySettings {
+            enabled: true,
+            url: "socks5h://127.0.0.1:7891".to_string(),
+        };
+        assert_eq!(
+            webview_proxy_url(&socks5h).unwrap().unwrap().scheme(),
+            "socks5"
+        );
+
+        let https = OutboundProxySettings {
+            enabled: true,
+            url: "https://proxy.example.com:443".to_string(),
+        };
+        assert!(webview_proxy_url(&https).is_err());
     }
 }

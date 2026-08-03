@@ -205,7 +205,7 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
               />
             </label>
           )}
-          <span className="settings-row-desc">默认 <code>http://127.0.0.1:7890</code>，支持 HTTP、HTTPS、SOCKS5/SOCKS5H。浏览器授权页仍需浏览器或系统代理。</span>
+          <span className="settings-row-desc">默认 <code>http://127.0.0.1:7890</code>。内置授权页会继承 HTTP、SOCKS5/SOCKS5H 代理；HTTPS 代理用于后端请求。</span>
           {outboundProxyError && <span className="settings-error">{outboundProxyError}</span>}
         </div>
 

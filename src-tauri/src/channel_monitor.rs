@@ -1,6 +1,8 @@
 use crate::db::{ChannelMonitorAccountSnapshot, ChannelMonitorEventSnapshot};
+use crate::model_integrity::ModelIntegrityResult;
 use crate::AppState;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Serialize)]
@@ -26,6 +28,8 @@ pub(crate) struct ChannelMonitorItem {
     name: String,
     account_type: String,
     account_status: String,
+    models: Vec<String>,
+    integrity: Option<ModelIntegrityResult>,
     latest_status: Option<String>,
     latest_checked_at: Option<String>,
     latest_ttfb_ms: Option<i64>,
@@ -67,6 +71,20 @@ pub(crate) fn get_channel_monitor_snapshot(
         .db
         .channel_monitor_snapshot()
         .map_err(|error| error.to_string())?;
+    let models = state
+        .db
+        .list_accounts()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|account| (account.id, account.models))
+        .collect::<HashMap<_, _>>();
+    let integrity = state
+        .db
+        .latest_model_integrity_results()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|result| (result.account_id.clone(), result))
+        .collect::<HashMap<_, _>>();
     let capacities = state.capacity.snapshot();
     let items = snapshots
         .into_iter()
@@ -76,7 +94,17 @@ pub(crate) fn get_channel_monitor_snapshot(
                 .copied()
                 .unwrap_or_default()
                 .max(0);
-            ChannelMonitorItem::from_snapshot(snapshot, current_capacity)
+            let account_models = models
+                .get(&snapshot.account_id)
+                .cloned()
+                .unwrap_or_default();
+            let account_integrity = integrity.get(&snapshot.account_id).cloned();
+            ChannelMonitorItem::from_snapshot(
+                snapshot,
+                current_capacity,
+                account_models,
+                account_integrity,
+            )
         })
         .collect::<Vec<_>>();
 
@@ -92,12 +120,19 @@ pub(crate) async fn probe_channel(
 }
 
 impl ChannelMonitorItem {
-    fn from_snapshot(snapshot: ChannelMonitorAccountSnapshot, current_capacity: i64) -> Self {
+    fn from_snapshot(
+        snapshot: ChannelMonitorAccountSnapshot,
+        current_capacity: i64,
+        models: Vec<String>,
+        integrity: Option<ModelIntegrityResult>,
+    ) -> Self {
         Self {
             account_id: snapshot.account_id,
             name: snapshot.name,
             account_type: snapshot.account_type,
             account_status: snapshot.account_status,
+            models,
+            integrity,
             latest_status: snapshot.latest_status,
             latest_checked_at: snapshot.latest_checked_at,
             latest_ttfb_ms: snapshot.latest_ttfb_ms,

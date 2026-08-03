@@ -1,4 +1,5 @@
 mod accounts;
+mod model_integrity;
 mod request_logs;
 mod schema;
 mod settings;
@@ -38,6 +39,7 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         schema::initialize(&conn)?;
+        model_integrity::initialize(&conn)?;
         request_logs::initialize(&conn)?;
 
         // File-backed databases use a dedicated rusqlite worker. In-memory test

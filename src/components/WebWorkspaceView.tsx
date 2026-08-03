@@ -37,7 +37,11 @@ export function WebWorkspaceView({
         if (activeTab && (!bounds || bounds.width < 1 || bounds.height < 1)) return
 
         void syncWebviewTabs({
-          active: activeTab ? { tabId: activeTab.id, url: activeTab.url } : null,
+          active: activeTab ? {
+            tabId: activeTab.id,
+            url: activeTab.url,
+            useOutboundProxy: activeTab.source?.kind === 'oauth',
+          } : null,
           openTabIds,
           bounds: bounds ? {
             x: bounds.left,

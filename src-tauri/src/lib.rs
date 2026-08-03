@@ -11,6 +11,7 @@ mod dns;
 mod logger;
 mod market;
 mod market_notification;
+mod model_integrity;
 mod oauth;
 mod outbound_proxy;
 mod pricing;

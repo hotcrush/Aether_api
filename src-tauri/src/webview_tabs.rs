@@ -46,6 +46,8 @@ pub(crate) struct CreateWorkspaceWebviewRequest {
     bounds: WorkspaceWebviewBounds,
     #[serde(default = "default_visible")]
     visible: bool,
+    #[serde(default)]
+    use_outbound_proxy: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +55,8 @@ pub(crate) struct CreateWorkspaceWebviewRequest {
 pub(crate) struct ActiveWorkspaceWebview {
     tab_id: String,
     url: String,
+    #[serde(default)]
+    use_outbound_proxy: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -420,7 +424,7 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
     let new_tab_app = app.clone();
     let new_tab_source_tab_id = request.tab_id.clone();
     let requested_download_paths = Arc::new(Mutex::new(HashMap::<String, PathBuf>::new()));
-    let builder = WebviewBuilder::new(webview_label.clone(), WebviewUrl::External(url))
+    let mut builder = WebviewBuilder::new(webview_label.clone(), WebviewUrl::External(url))
         .focused(false)
         .devtools(cfg!(debug_assertions))
         .initialization_script_for_all_frames(copy_initialization_script(&copy_proof))
@@ -483,6 +487,12 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
             }
             true
         });
+    if request.use_outbound_proxy {
+        let settings = app.state::<crate::AppState>().outbound_proxy.load_full();
+        if let Some(proxy_url) = crate::outbound_proxy::webview_proxy_url(&settings)? {
+            builder = builder.proxy_url(proxy_url);
+        }
+    }
 
     let webview = caller
         .window()
@@ -579,6 +589,7 @@ pub(crate) async fn sync_webview_tabs<R: Runtime>(
             url: active.url,
             bounds,
             visible: true,
+            use_outbound_proxy: active.use_outbound_proxy,
         },
     )
     .await?;

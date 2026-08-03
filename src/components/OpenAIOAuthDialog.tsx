@@ -66,7 +66,7 @@ export function OpenAIOAuthDialog({
     >
       <div className="oauth-dialog-intro">
         <KeyRound size={17} />
-        <span>OpenAI 授权将在 Aether 内置 Tab 中完成，回调由本机服务自动接收。</span>
+        <span>OpenAI 授权将在 Aether 内置 Tab 中完成；启用出站代理后，授权网页与令牌兑换都会使用该代理。</span>
       </div>
 
       <div className="oauth-step">

@@ -1,5 +1,32 @@
 export type ChannelMonitorStatus = 'operational' | 'degraded' | 'failed' | 'error'
 export type ChannelMonitorWindow = '24h' | '7d'
+export type ModelIntegrityRisk = 'normal' | 'suspicious' | 'high_risk' | 'inconclusive'
+export type ModelIntegrityCheckStatus = 'pass' | 'warn' | 'fail'
+
+export interface ModelIntegrityCheck {
+  key: string
+  label: string
+  status: ModelIntegrityCheckStatus
+  message: string
+}
+
+export interface ModelIntegrityResult {
+  id: number
+  account_id: string
+  requested_model: string
+  declared: boolean | null
+  observed_models: string[]
+  risk: ModelIntegrityRisk
+  score: number
+  summary: string
+  checks: ModelIntegrityCheck[]
+  probe_count: number
+  successful_probes: number
+  total_tokens: number
+  reasoning_tokens: number
+  duration_ms: number
+  created_at: number | string
+}
 
 export interface ChannelMonitorEvent {
   id: number
@@ -22,6 +49,8 @@ export interface ChannelMonitorItem {
   name: string
   account_type: 'oauth' | 'api_key'
   account_status: 'active' | 'disabled'
+  models: string[]
+  integrity: ModelIntegrityResult | null
   latest_status: ChannelMonitorStatus | null
   latest_checked_at: number | string | null
   latest_ttfb_ms: number | null

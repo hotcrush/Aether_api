@@ -12,6 +12,7 @@ export interface WebviewBounds {
 export interface ActiveWebviewTab {
   tabId: string
   url: string
+  useOutboundProxy?: boolean
 }
 
 export interface SyncWebviewTabsInput {

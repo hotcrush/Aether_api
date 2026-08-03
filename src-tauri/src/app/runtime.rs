@@ -221,6 +221,8 @@ pub(crate) fn run() {
             super::logs::clear_request_logs,
             crate::channel_monitor::get_channel_monitor_snapshot,
             crate::channel_monitor::probe_channel,
+            crate::model_integrity::probe_model_integrity,
+            crate::model_integrity::list_model_integrity_history,
             crate::market::get_market_snapshot,
             crate::market::refresh_market,
             crate::market::get_market_analytics,

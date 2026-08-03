@@ -53,7 +53,11 @@ import {
   syncAccountRateMultiplier,
   testAccount,
 } from './lib/commands'
-import { getChannelMonitorSnapshot, probeChannel } from './lib/channelMonitor'
+import {
+  getChannelMonitorSnapshot,
+  probeChannel,
+  probeModelIntegrity,
+} from './lib/channelMonitor'
 import { loadDailyBudget, saveDailyBudget } from './lib/dailyBudget'
 import { errorText } from './lib/format'
 import {
@@ -116,7 +120,7 @@ import type {
   RelayUsageQueryState,
   ToastItem,
 } from './types'
-import type { ChannelMonitorSnapshot } from './monitorTypes'
+import type { ChannelMonitorSnapshot, ModelIntegrityResult } from './monitorTypes'
 
 const USAGE_QUERY_CONCURRENCY = 3
 const MAX_CLIPBOARD_IMPORT_CANDIDATES = 16
@@ -177,6 +181,7 @@ export default function App() {
   const [monitorRefreshing, setMonitorRefreshing] = useState(false)
   const [monitorError, setMonitorError] = useState('')
   const [probeBusy, setProbeBusy] = useState<Set<string>>(() => new Set())
+  const [integrityProbeBusy, setIntegrityProbeBusy] = useState<Set<string>>(() => new Set())
   const [toasts, setToasts] = useState<ToastItem[]>([])
   const toastId = useRef(0)
   const relayAutoVersions = useRef(new Map<string, string>())
@@ -355,14 +360,15 @@ export default function App() {
         if (!oauthState || !pendingOpenAIOAuthStates.current.delete(oauthState)) return
 
         setTabState((current) => {
-          const oauthTab = current.tabs.find(
+          const oauthTabIds = current.tabs.filter(
             (tab) => tab.kind === 'web'
               && tab.source?.kind === 'oauth'
               && tab.source.id === oauthState,
+          ).map((tab) => tab.id)
+          const withoutAuthorizationTab = oauthTabIds.reduce(
+            (state, tabId) => closeWorkspaceTab(state, tabId),
+            current,
           )
-          const withoutAuthorizationTab = oauthTab
-            ? closeWorkspaceTab(current, oauthTab.id)
-            : current
           return openInternalWorkspaceTab(withoutAuthorizationTab, 'upstreams')
         })
 
@@ -588,7 +594,20 @@ export default function App() {
     }).catch(() => undefined)
 
     void listenWebviewOpenRequested((request) => {
-      if (!disposed) openExternalWebTab(request.url, request.title)
+      if (disposed) return
+      const parsed = parseHttpUrl(request.url)
+      if (!parsed) return
+      setTabState((current) => {
+        const sourceTab = current.tabs.find((tab) => tab.id === request.sourceTabId)
+        const source = sourceTab?.kind === 'web' && sourceTab.source?.kind === 'oauth'
+          ? sourceTab.source
+          : { kind: 'manual' as const }
+        return openWebWorkspaceTab(current, {
+          url: parsed.href,
+          title: request.title?.trim() || parsed.hostname,
+          source,
+        })
+      })
     }).then((unlisten) => {
       if (disposed) unlisten()
       else stopOpenRequested = unlisten
@@ -601,7 +620,7 @@ export default function App() {
       stopImportCandidate?.()
       stopOpenRequested?.()
     }
-  }, [enqueueClipboardCandidate, openExternalWebTab, scanClipboard])
+  }, [enqueueClipboardCandidate, scanClipboard])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -746,6 +765,28 @@ export default function App() {
     } finally {
       await loadChannelMonitor(false)
       setProbeBusy((current) => {
+        const next = new Set(current)
+        next.delete(accountId)
+        return next
+      })
+    }
+  }, [loadChannelMonitor, notify])
+
+  const runModelIntegrityProbe = useCallback(async (
+    accountId: string,
+    model: string,
+  ): Promise<ModelIntegrityResult | null> => {
+    setIntegrityProbeBusy((current) => new Set(current).add(accountId))
+    try {
+      const result = await probeModelIntegrity(accountId, model)
+      notify(`验模完成：${model} · ${integrityRiskLabel(result.risk)} · ${result.score} 分`)
+      return result
+    } catch (error) {
+      notify(errorText(error), true)
+      return null
+    } finally {
+      await loadChannelMonitor(false)
+      setIntegrityProbeBusy((current) => {
         const next = new Set(current)
         next.delete(accountId)
         return next
@@ -1457,8 +1498,10 @@ export default function App() {
           refreshing={monitorRefreshing}
           error={monitorError}
           probeBusy={probeBusy}
+          integrityProbeBusy={integrityProbeBusy}
           onRefresh={() => { void loadChannelMonitor(false) }}
           onProbe={(accountId) => { void runChannelProbe(accountId) }}
+          onIntegrityProbe={runModelIntegrityProbe}
         />
       </main>
       ))}
@@ -1564,6 +1607,15 @@ function parseHttpUrl(value: string) {
 
 function isMarketSection(value: string): value is MarketSection {
   return value === 'products' || value === 'stores' || value === 'analytics' || value === 'alerts'
+}
+
+function integrityRiskLabel(risk: ModelIntegrityResult['risk']) {
+  switch (risk) {
+    case 'normal': return '暂未发现异常'
+    case 'suspicious': return '可疑'
+    case 'high_risk': return '高风险'
+    default: return '无法判断'
+  }
 }
 
 function mergeQuotaSnapshot(

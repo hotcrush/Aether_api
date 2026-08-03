@@ -9,6 +9,8 @@ import {
   RefreshCw,
   Search,
   Server,
+  ShieldAlert,
+  ShieldCheck,
   XCircle,
   Zap,
 } from 'lucide-react'
@@ -19,6 +21,7 @@ import type {
   ChannelMonitorSnapshot,
   ChannelMonitorStatus,
   ChannelMonitorWindow,
+  ModelIntegrityResult,
 } from '../monitorTypes'
 import { Dialog } from './Dialog'
 
@@ -28,8 +31,10 @@ interface ChannelMonitorPanelProps {
   refreshing: boolean
   error: string
   probeBusy: Set<string>
+  integrityProbeBusy: Set<string>
   onRefresh: () => void
   onProbe: (accountId: string) => void
+  onIntegrityProbe: (accountId: string, model: string) => Promise<ModelIntegrityResult | null>
 }
 
 type MonitorFilter = 'all' | 'healthy' | 'abnormal' | 'unknown'
@@ -40,13 +45,31 @@ export function ChannelMonitorPanel({
   refreshing,
   error,
   probeBusy,
+  integrityProbeBusy,
   onRefresh,
   onProbe,
+  onIntegrityProbe,
 }: ChannelMonitorPanelProps) {
   const [window, setWindow] = useState<ChannelMonitorWindow>('24h')
   const [filter, setFilter] = useState<MonitorFilter>('all')
   const [query, setQuery] = useState('')
   const [detail, setDetail] = useState<ChannelMonitorItem | null>(null)
+  const [integrityTarget, setIntegrityTarget] = useState<ChannelMonitorItem | null>(null)
+  const [integrityModel, setIntegrityModel] = useState('')
+  const [integrityResult, setIntegrityResult] = useState<ModelIntegrityResult | null>(null)
+
+  const openIntegrityProbe = (item: ChannelMonitorItem) => {
+    const configuredModel = item.models.find((model) => model !== '*' && !model.includes('*'))
+    setIntegrityTarget(item)
+    setIntegrityModel(item.integrity?.requested_model || configuredModel || item.timeline[0]?.model || '')
+    setIntegrityResult(item.integrity)
+  }
+
+  const runIntegrityProbe = async () => {
+    if (!integrityTarget || !integrityModel.trim()) return
+    const result = await onIntegrityProbe(integrityTarget.account_id, integrityModel.trim())
+    if (result) setIntegrityResult(result)
+  }
 
   const items = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -80,7 +103,7 @@ export function ChannelMonitorPanel({
         <div className="monitor-hero-copy">
           <span className="monitor-eyebrow"><Radio size={13} />本地实时观测</span>
           <h2>渠道监控</h2>
-          <p>基于真实转发与手动检测统计，不在后台发送额外的模型请求。</p>
+          <p>常规统计不主动请求；模型验真仅在手动触发时发送三组低成本探针。</p>
         </div>
         <div className="monitor-hero-actions">
           <span className="monitor-updated">
@@ -190,7 +213,9 @@ export function ChannelMonitorPanel({
               item={item}
               window={window}
               probing={probeBusy.has(item.account_id)}
+              integrityProbing={integrityProbeBusy.has(item.account_id)}
               onProbe={() => onProbe(item.account_id)}
+              onIntegrityProbe={() => openIntegrityProbe(item)}
               onDetail={() => setDetail(item)}
               key={item.account_id}
             />
@@ -199,6 +224,15 @@ export function ChannelMonitorPanel({
       )}
 
       <MonitorDetailDialog item={detail} onClose={() => setDetail(null)} />
+      <IntegrityProbeDialog
+        item={integrityTarget}
+        model={integrityModel}
+        result={integrityResult}
+        busy={Boolean(integrityTarget && integrityProbeBusy.has(integrityTarget.account_id))}
+        onModelChange={setIntegrityModel}
+        onRun={() => { void runIntegrityProbe() }}
+        onClose={() => setIntegrityTarget(null)}
+      />
     </section>
   )
 }
@@ -230,13 +264,17 @@ function ChannelCard({
   item,
   window,
   probing,
+  integrityProbing,
   onProbe,
+  onIntegrityProbe,
   onDetail,
 }: {
   item: ChannelMonitorItem
   window: ChannelMonitorWindow
   probing: boolean
+  integrityProbing: boolean
   onProbe: () => void
+  onIntegrityProbe: () => void
   onDetail: () => void
 }) {
   const status = displayStatus(item)
@@ -261,15 +299,30 @@ function ChannelCard({
             </div>
           </div>
         </div>
-        <button
-          className="monitor-probe"
-          onClick={onProbe}
-          disabled={item.account_status === 'disabled' || probing}
-          data-tooltip={item.account_status === 'disabled' ? '渠道已停用' : '执行一次轻量连接检测'}
-        >
-          <RefreshCw className={probing ? 'spin' : undefined} size={13} />
-          检测
-        </button>
+        <div className="monitor-channel-actions">
+          {item.account_type === 'api_key' && (
+            <button
+              className="monitor-probe monitor-integrity-trigger"
+              onClick={onIntegrityProbe}
+              disabled={item.account_status === 'disabled' || integrityProbing}
+              data-tooltip="用三组动态探针检查模型声明与能力指纹"
+            >
+              {integrityProbing
+                ? <RefreshCw className="spin" size={13} />
+                : <ShieldCheck size={13} />}
+              验模
+            </button>
+          )}
+          <button
+            className="monitor-probe"
+            onClick={onProbe}
+            disabled={item.account_status === 'disabled' || probing}
+            data-tooltip={item.account_status === 'disabled' ? '渠道已停用' : '执行一次轻量连接检测'}
+          >
+            <RefreshCw className={probing ? 'spin' : undefined} size={13} />
+            检测
+          </button>
+        </div>
       </div>
 
       <div className="monitor-channel-metrics">
@@ -286,6 +339,10 @@ function ChannelCard({
         </div>
         <strong>{item.current_capacity} / {item.concurrency}</strong>
       </div>
+
+      {item.account_type === 'api_key' && item.integrity && (
+        <IntegritySummary result={item.integrity} onClick={onIntegrityProbe} />
+      )}
 
       <Timeline events={item.timeline} />
 
@@ -353,6 +410,133 @@ function Timeline({ events }: { events: ChannelMonitorEvent[] }) {
   )
 }
 
+function IntegritySummary({
+  result,
+  onClick,
+}: {
+  result: ModelIntegrityResult
+  onClick: () => void
+}) {
+  const highRisk = result.risk === 'high_risk' || result.risk === 'suspicious'
+  return (
+    <button
+      className={`monitor-integrity-summary ${result.risk}`}
+      onClick={onClick}
+      data-tooltip={result.summary}
+    >
+      {highRisk ? <ShieldAlert size={14} /> : <ShieldCheck size={14} />}
+      <span>
+        <strong>{integrityRiskLabel(result.risk)}</strong>
+        <small>{result.requested_model} · {formatRelativeTime(result.created_at)}</small>
+      </span>
+      <b>{result.score}</b>
+    </button>
+  )
+}
+
+function IntegrityProbeDialog({
+  item,
+  model,
+  result,
+  busy,
+  onModelChange,
+  onRun,
+  onClose,
+}: {
+  item: ChannelMonitorItem | null
+  model: string
+  result: ModelIntegrityResult | null
+  busy: boolean
+  onModelChange: (model: string) => void
+  onRun: () => void
+  onClose: () => void
+}) {
+  const modelListId = item ? `integrity-models-${item.account_id}` : 'integrity-models'
+  return (
+    <Dialog
+      open={Boolean(item)}
+      title={item ? `${item.name} · 模型验真` : '模型验真'}
+      onClose={onClose}
+      preventClose={busy}
+      footer={
+        <>
+          <button className="btn" onClick={onClose} disabled={busy}>关闭</button>
+          <button
+            className="btn btn-primary"
+            onClick={onRun}
+            disabled={busy || !model.trim()}
+          >
+            {busy ? <RefreshCw className="spin" size={14} /> : <ShieldCheck size={14} />}
+            {busy ? '正在执行三组探针' : result ? '重新检测' : '开始验模'}
+          </button>
+        </>
+      }
+    >
+      {item && (
+        <div className="monitor-integrity-dialog">
+          <div className="monitor-integrity-notice">
+            <ShieldCheck size={16} />
+            <span>
+              将直连该中转站执行结构化输出、工具调用和多轮指令三组动态挑战。
+              会产生少量 Token 消耗，检测数据独立保存。
+            </span>
+          </div>
+          <div className="field">
+            <label htmlFor="integrityModel">标称模型</label>
+            <input
+              id="integrityModel"
+              value={model}
+              list={modelListId}
+              onChange={(event) => onModelChange(event.target.value)}
+              placeholder="例如 gpt-5"
+              autoComplete="off"
+              disabled={busy}
+            />
+            <datalist id={modelListId}>
+              {item.models
+                .filter((candidate) => candidate !== '*' && !candidate.includes('*'))
+                .map((candidate) => <option value={candidate} key={candidate} />)}
+            </datalist>
+          </div>
+
+          {result && (
+            <div className={`monitor-integrity-result ${result.risk}`}>
+              <div className="monitor-integrity-result-head">
+                <div>
+                  <span>风险判断</span>
+                  <strong>{integrityRiskLabel(result.risk)}</strong>
+                </div>
+                <b>{result.score}<small>/100</small></b>
+              </div>
+              <p>{result.summary}</p>
+              <div className="monitor-integrity-facts">
+                <span>有效探针 <strong>{result.successful_probes}/{result.probe_count}</strong></span>
+                <span>Token <strong>{formatNumber(result.total_tokens)}</strong></span>
+                <span>耗时 <strong>{formatLatency(result.duration_ms)}</strong></span>
+                <span>响应模型 <strong>{result.observed_models.join('、') || '未提供'}</strong></span>
+              </div>
+              <div className="monitor-integrity-checks">
+                {result.checks.map((check, index) => (
+                  <div className={check.status} key={`${check.key}-${index}`}>
+                    <span>{check.status === 'pass' ? '通过' : check.status === 'warn' ? '提示' : '异常'}</span>
+                    <div>
+                      <strong>{check.label}</strong>
+                      <small>{check.message}</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <small className="monitor-integrity-disclaimer">
+                黑盒检测只能提供风险证据；中转站仍可能伪造模型字段或代理真实模型。
+              </small>
+            </div>
+          )}
+        </div>
+      )}
+    </Dialog>
+  )
+}
+
 function MonitorDetailDialog({ item, onClose }: { item: ChannelMonitorItem | null; onClose: () => void }) {
   return (
     <Dialog
@@ -380,6 +564,15 @@ function MonitorDetailDialog({ item, onClose }: { item: ChannelMonitorItem | nul
       )}
     </Dialog>
   )
+}
+
+function integrityRiskLabel(risk: ModelIntegrityResult['risk']) {
+  switch (risk) {
+    case 'normal': return '暂未发现异常'
+    case 'suspicious': return '可疑'
+    case 'high_risk': return '高风险'
+    default: return '无法判断'
+  }
 }
 
 function displayStatus(item: ChannelMonitorItem): ChannelMonitorStatus | null {
