@@ -3,9 +3,10 @@ use super::proxy_settings::{configured_proxy_port, proxy_profile};
 use super::vault::VaultState;
 use super::AppState;
 use crate::capacity::CapacityRegistry;
+use crate::cost_guard;
 use crate::db::Db;
 use crate::market::MarketState;
-use crate::{dns, proxy};
+use crate::{outbound_proxy, proxy};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -64,7 +65,19 @@ pub(crate) fn run() {
             let access_token = Arc::new(arc_swap::ArcSwap::new(Arc::new(access_token)));
             let proxy_running = Arc::new(AtomicBool::new(false));
             let capacity = Arc::new(CapacityRegistry::default());
-            let client = dns::build_client(120, 15);
+            let openai_callback_ready = Arc::new(AtomicBool::new(false));
+            let cost_guard = Arc::new(arc_swap::ArcSwap::new(Arc::new(cost_guard::load(&db))));
+            let outbound_proxy_settings = outbound_proxy::load(&db);
+            let client = Arc::new(arc_swap::ArcSwap::new(Arc::new(
+                outbound_proxy::build_client(120, 15, &outbound_proxy_settings)
+                    .expect("初始化出站 HTTP 客户端失败"),
+            )));
+            let proxy_http_client = Arc::new(arc_swap::ArcSwap::new(Arc::new(
+                outbound_proxy::build_client(600, 15, &outbound_proxy_settings)
+                    .expect("初始化本地中转 HTTP 客户端失败"),
+            )));
+            let outbound_proxy =
+                Arc::new(arc_swap::ArcSwap::new(Arc::new(outbound_proxy_settings)));
             let legacy_market_dir = std::env::var_os("CODEX_RELAY_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .or_else(|| {
@@ -75,7 +88,7 @@ pub(crate) fn run() {
                 });
             let market = MarketState::new(
                 app_dir.join("market.db"),
-                client.clone(),
+                client.load_full().as_ref().clone(),
                 app.handle().clone(),
                 legacy_market_dir.as_deref(),
             )
@@ -85,6 +98,8 @@ pub(crate) fn run() {
             let proxy_token = Arc::clone(&access_token);
             let proxy_status = Arc::clone(&proxy_running);
             let proxy_capacity = Arc::clone(&capacity);
+            let proxy_cost_guard = Arc::clone(&cost_guard);
+            let proxy_client = Arc::clone(&proxy_http_client);
             let proxy_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 proxy::start_proxy_server(
@@ -93,18 +108,26 @@ pub(crate) fn run() {
                     proxy_token,
                     proxy_status,
                     proxy_capacity,
+                    proxy_cost_guard,
+                    proxy_client,
                     proxy_app,
                 )
                 .await;
             });
+            crate::billing_sync::start_rate_sync(Arc::clone(&db), Arc::clone(&client));
 
             app.manage(AppState {
                 db,
                 app_data_dir: app_dir.clone(),
                 client,
+                proxy_client: proxy_http_client,
+                outbound_proxy,
                 proxy_port,
                 proxy_profile,
                 capacity,
+                cost_guard,
+                oauth_sessions: crate::oauth::OpenAIOAuthSessions::default(),
+                openai_callback_ready: Arc::clone(&openai_callback_ready),
                 access_token,
                 proxy_running,
                 clipboard_import: Mutex::new(ClipboardImportState::default()),
@@ -114,6 +137,11 @@ pub(crate) fn run() {
             app.manage(crate::webview_tabs::WorkspaceWebviewState::default());
             app.manage(Arc::clone(&market));
             MarketState::start(market);
+            let callback_app = app.handle().clone();
+            tauri::async_runtime::spawn(super::accounts::start_openai_callback_server(
+                callback_app,
+                openai_callback_ready,
+            ));
 
             let show_item = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "退出 Aether").build(app)?;
@@ -173,6 +201,14 @@ pub(crate) fn run() {
             super::accounts::set_account_status,
             super::accounts::set_account_priority,
             super::accounts::set_account_concurrency,
+            super::accounts::set_account_rate_multiplier,
+            super::accounts::set_account_auto_sync_rate_multiplier,
+            super::accounts::sync_account_rate_multiplier,
+            super::accounts::begin_openai_oauth,
+            super::proxy_settings::get_cost_guard_settings,
+            super::proxy_settings::update_cost_guard_settings,
+            super::proxy_settings::get_outbound_proxy_settings,
+            super::proxy_settings::update_outbound_proxy_settings,
             super::proxy_settings::get_proxy_info,
             super::clipboard::inspect_clipboard_import,
             super::clipboard::confirm_clipboard_import,

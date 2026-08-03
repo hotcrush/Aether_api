@@ -33,6 +33,8 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
         ("models", "TEXT NOT NULL DEFAULT ''"),
         ("weight", "INTEGER NOT NULL DEFAULT 1"),
         ("concurrency", "INTEGER NOT NULL DEFAULT 10"),
+        ("rate_multiplier", "REAL NOT NULL DEFAULT 1.0"),
+        ("auto_sync_rate_multiplier", "INTEGER NOT NULL DEFAULT 0"),
         ("last_error", "TEXT NOT NULL DEFAULT ''"),
         ("last_used_at", "TEXT"),
         ("request_count", "INTEGER NOT NULL DEFAULT 0"),
@@ -66,6 +68,11 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
           WHERE weight IS NULL OR weight < 1 OR weight > 1000;
          UPDATE accounts SET concurrency = 10
           WHERE concurrency IS NULL OR concurrency < 1 OR concurrency > 1000;
+         UPDATE accounts SET rate_multiplier = 1.0
+          WHERE rate_multiplier IS NULL OR rate_multiplier < 0 OR rate_multiplier > 100
+             OR rate_multiplier != rate_multiplier;
+         UPDATE accounts SET auto_sync_rate_multiplier = 0
+          WHERE auto_sync_rate_multiplier IS NULL;
          UPDATE accounts SET unpriced_tokens = total_tokens
           WHERE total_tokens > 0
             AND input_tokens = 0

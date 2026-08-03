@@ -23,7 +23,8 @@ async fn account_for_quota(
             .map(|expires| expires <= chrono::Utc::now().timestamp() + 120)
             .unwrap_or(false);
     if needs_refresh && !account.refresh_token.is_empty() {
-        let refreshed = oauth::refresh_account(&state.client, &account).await?;
+        let client = state.client.load_full();
+        let refreshed = oauth::refresh_account(&client, &account).await?;
         account = state
             .db
             .update_oauth_tokens(id, &refreshed)
@@ -45,15 +46,16 @@ async fn query_quota_for_id(
     id: &str,
 ) -> Result<quota::QuotaUsage, String> {
     let account = account_for_quota(state, id).await?;
-    let usage = match quota::query_usage(&state.client, &account).await {
+    let client = state.client.load_full();
+    let usage = match quota::query_usage(&client, &account).await {
         Ok(usage) => usage,
         Err(error) if error.status == Some(401) && !account.refresh_token.is_empty() => {
-            let refreshed = oauth::refresh_account(&state.client, &account).await?;
+            let refreshed = oauth::refresh_account(&client, &account).await?;
             let refreshed = state
                 .db
                 .update_oauth_tokens(id, &refreshed)
                 .map_err(|db_error| format!("保存刷新结果失败: {db_error}"))?;
-            quota::query_usage(&state.client, &refreshed)
+            quota::query_usage(&client, &refreshed)
                 .await
                 .map_err(|retry_error| retry_error.to_string())?
         }
@@ -125,7 +127,8 @@ pub(super) async fn query_relay_usage(
         .get_account(&id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "中转站不存在".to_string())?;
-    relay_usage::query_usage(&state.client, &account).await
+    let client = state.client.load_full();
+    relay_usage::query_usage(&client, &account).await
 }
 
 fn relay_site_url(base_url: &str) -> Result<reqwest::Url, String> {

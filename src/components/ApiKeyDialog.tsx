@@ -1,4 +1,4 @@
-import { Plus, RefreshCw } from 'lucide-react'
+import { Info, Plus, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { importAccounts } from '../lib/commands'
 import { errorText } from '../lib/format'
@@ -83,6 +83,10 @@ export function ApiKeyDialog({ open, onClose, onSaved, notify }: ApiKeyDialogPro
         </>
       }
     >
+      <div className="oauth-dialog-intro">
+        <Info size={15} />
+        <span>兼容 OpenAI API 与 QuantumNous/new-api。new-api 请填写站点根地址（不要带 /v1），并使用中转 Token（通常以 sk- 开头）。</span>
+      </div>
       <div className="field">
         <label htmlFor="keyName">名称</label>
         <input
@@ -108,7 +112,7 @@ export function ApiKeyDialog({ open, onClose, onSaved, notify }: ApiKeyDialogPro
           id="keyBaseUrl"
           value={baseUrl}
           onChange={(event) => setBaseUrl(event.target.value)}
-          placeholder="https://api.openai.com"
+          placeholder="https://new-api.example.com"
         />
       </div>
       <div className="field">

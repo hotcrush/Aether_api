@@ -45,7 +45,8 @@ pub(super) async fn ensure_account_ready(
         }
         return Ok(current);
     }
-    let refreshed = oauth::refresh_account(&state.client, &current).await?;
+    let client = state.client.load_full();
+    let refreshed = oauth::refresh_account(&client, &current).await?;
     state
         .db
         .update_oauth_tokens(&current.id, &refreshed)

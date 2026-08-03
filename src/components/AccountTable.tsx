@@ -4,6 +4,7 @@ import { formatExpiry } from '../lib/time'
 import type { Account, QuotaQueryState, RelayUsageQueryState } from '../types'
 import { CapacityEditor } from './CapacityEditor'
 import { PriorityEditor } from './PriorityEditor'
+import { RateMultiplierEditor } from './RateMultiplierEditor'
 import { QuotaPanel } from './QuotaPanel'
 import { RelayUsagePanel } from './RelayUsagePanel'
 
@@ -81,6 +82,9 @@ interface AccountTableProps {
   onRelayUsage: (account: Account) => void
   onPriority: (account: Account, priority: number) => void
   onConcurrency: (account: Account, concurrency: number) => void
+  onRateMultiplier: (account: Account, multiplier: number) => void
+  onAutoSyncRateMultiplier: (account: Account, enabled: boolean) => void
+  onSyncRateMultiplier: (account: Account) => void
   onDelete: (account: Account) => void
 }
 
@@ -102,6 +106,9 @@ export function AccountTable({
   onRelayUsage,
   onPriority,
   onConcurrency,
+  onRateMultiplier,
+  onAutoSyncRateMultiplier,
+  onSyncRateMultiplier,
   onDelete,
 }: AccountTableProps) {
   const [page, setPage] = useState(0)
@@ -122,6 +129,7 @@ export function AccountTable({
               <th className="col-usage">额度 / 路由</th>
               <th className="col-capacity">容量</th>
               <th className="col-priority">优先级</th>
+              <th className="col-rate-multiplier">成本倍率</th>
               <th className="col-status">状态</th>
               <th className="col-actions" />
             </tr>
@@ -143,6 +151,9 @@ export function AccountTable({
                 onRelayUsage={onRelayUsage}
                 onPriority={onPriority}
                 onConcurrency={onConcurrency}
+                onRateMultiplier={onRateMultiplier}
+                onAutoSyncRateMultiplier={onAutoSyncRateMultiplier}
+                onSyncRateMultiplier={onSyncRateMultiplier}
                 onDelete={onDelete}
               />
             ))}
@@ -209,6 +220,9 @@ interface AccountRowProps {
   onRelayUsage: (account: Account) => void
   onPriority: (account: Account, priority: number) => void
   onConcurrency: (account: Account, concurrency: number) => void
+  onRateMultiplier: (account: Account, multiplier: number) => void
+  onAutoSyncRateMultiplier: (account: Account, enabled: boolean) => void
+  onSyncRateMultiplier: (account: Account) => void
   onDelete: (account: Account) => void
 }
 
@@ -226,6 +240,9 @@ function AccountRow({
   onRelayUsage,
   onPriority,
   onConcurrency,
+  onRateMultiplier,
+  onAutoSyncRateMultiplier,
+  onSyncRateMultiplier,
   onDelete,
 }: AccountRowProps) {
   const oauth = account.account_type === 'oauth'
@@ -241,6 +258,7 @@ function AccountRow({
   const openRelayBusy = busyActions.has(`open-relay:${account.id}`)
   const priorityBusy = busyActions.has(`priority:${account.id}`)
   const capacityBusy = busyActions.has(`concurrency:${account.id}`)
+  const rateMultiplierBusy = busyActions.has(`rate-multiplier:${account.id}`)
   const hasRelayBaseUrl = Boolean(account.base_url?.trim())
   const tipContent = account.last_error ? (getErrorTip(account.last_error) || account.last_error) : null
   const parsedErr = account.last_error ? parseError(account.last_error) : null
@@ -308,6 +326,15 @@ function AccountRow({
           priority={account.priority ?? 1}
           busy={priorityBusy}
           onSave={(priority) => onPriority(account, priority)}
+        />
+      </td>
+      <td className="col-rate-multiplier">
+        <RateMultiplierEditor
+          account={account}
+          busy={rateMultiplierBusy}
+          onSave={(multiplier) => onRateMultiplier(account, multiplier)}
+          onAutoSync={(enabled) => onAutoSyncRateMultiplier(account, enabled)}
+          onSync={() => onSyncRateMultiplier(account)}
         />
       </td>
       <td className="col-status">

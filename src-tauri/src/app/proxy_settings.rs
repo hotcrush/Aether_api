@@ -1,5 +1,7 @@
 use super::AppState;
+use crate::cost_guard::{self, CostGuardSettings};
 use crate::db::Db;
+use crate::outbound_proxy::{self, OutboundProxySettings};
 use crate::{codex_takeover, pricing};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -9,6 +11,41 @@ use tracing::warn;
 
 const DEVELOPMENT_PROXY_PORT: u16 = 19_090;
 const PRODUCTION_PROXY_PORT: u16 = 9_090;
+
+#[tauri::command]
+pub(crate) fn get_cost_guard_settings(state: tauri::State<AppState>) -> CostGuardSettings {
+    state.cost_guard.load().as_ref().clone()
+}
+
+#[tauri::command]
+pub(crate) fn update_cost_guard_settings(
+    state: tauri::State<AppState>,
+    settings: CostGuardSettings,
+) -> Result<CostGuardSettings, String> {
+    let settings = cost_guard::save(&state.db, settings)?;
+    state.cost_guard.store(Arc::new(settings.clone()));
+    Ok(settings)
+}
+
+#[tauri::command]
+pub(crate) fn get_outbound_proxy_settings(state: tauri::State<AppState>) -> OutboundProxySettings {
+    state.outbound_proxy.load().as_ref().clone()
+}
+
+#[tauri::command]
+pub(crate) fn update_outbound_proxy_settings(
+    state: tauri::State<AppState>,
+    settings: OutboundProxySettings,
+) -> Result<OutboundProxySettings, String> {
+    let settings = settings.validate()?;
+    let client = outbound_proxy::build_client(120, 15, &settings)?;
+    let proxy_client = outbound_proxy::build_client(600, 15, &settings)?;
+    let settings = outbound_proxy::save(&state.db, settings)?;
+    state.client.store(Arc::new(client));
+    state.proxy_client.store(Arc::new(proxy_client));
+    state.outbound_proxy.store(Arc::new(settings.clone()));
+    Ok(settings)
+}
 
 #[tauri::command]
 pub(crate) fn get_cache(
@@ -153,7 +190,11 @@ const BUILD_TIME: &str = env!("AETHER_BUILD_TIME");
 
 #[tauri::command]
 pub(crate) fn get_app_version() -> serde_json::Value {
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     json!({
         "version": env!("CARGO_PKG_VERSION"),
         "commit": GIT_COMMIT,

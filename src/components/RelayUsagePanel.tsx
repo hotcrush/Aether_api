@@ -1,5 +1,5 @@
 import { AlertCircle, Gauge, RefreshCw } from 'lucide-react'
-import { formatShortTime } from '../lib/time'
+import { formatDateTime, formatShortTime } from '../lib/time'
 import type { RelayUsageQueryState, RelayUsageSummary } from '../types'
 
 interface RelayUsagePanelProps {
@@ -46,11 +46,52 @@ export function RelayUsagePanel({
 function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuery: () => void }) {
   const quota = quotaProgress(usage)
   const cost30d = usage.last_30_days_actual_cost ?? usage.total_actual_cost
+  const isQuotaUnit = usage.unit === 'quota' || usage.provider === 'new_api' || usage.mode === 'new_api'
+  const amountUnit = isQuotaUnit ? '站点额度单位' : '美元'
+  const lastRequestAt = usage.remote_last_request_at
+  const requestCount = finiteCount(usage.remote_request_count)
+  if (usage.provider === 'new_api' || usage.mode === 'new_api') {
+    return (
+      <div className="relay-usage-values">
+        <div className="relay-cost-line">
+          <span className="relay-cost-label">用量</span>
+          <strong
+            className="relay-cost-value"
+            data-tooltip={amountTooltip(usage.quota_used, usage, amountUnit)}
+          >
+            {formatAmount(usage.quota_used, 2, true)}
+          </strong>
+          <button
+            className="quota-refresh relay-inline-refresh"
+            onClick={onQuery}
+            data-tooltip={`刷新用量，上次查询 ${formatShortTime(usage.fetched_at)}`}
+            aria-label="刷新中转站用量"
+          >
+            <RefreshCw size={11} />
+          </button>
+        </div>
+        <div className="relay-cost-line">
+          <span className="relay-cost-label">余额</span>
+          <strong
+            className="relay-cost-value"
+            data-tooltip={usage.unlimited_quota ? undefined : amountTooltip(usage.remaining, usage, amountUnit)}
+          >
+            {usage.unlimited_quota ? '无限制' : formatAmount(usage.remaining, 2, true)}
+          </strong>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="relay-usage-values">
       <div className="relay-cost-line">
         <span className="relay-cost-label">今日</span>
-        <strong className="relay-cost-value">{formatUsd(usage.today_actual_cost, 4)}</strong>
+        <strong
+          className="relay-cost-value"
+          data-tooltip={amountTooltip(usage.today_actual_cost, usage, amountUnit)}
+        >
+          {formatAmount(usage.today_actual_cost, 4, isQuotaUnit)}
+        </strong>
         <button
           className="quota-refresh relay-inline-refresh"
           onClick={onQuery}
@@ -62,29 +103,57 @@ function RelayUsageValues({ usage, onQuery }: { usage: RelayUsageSummary; onQuer
       </div>
       <div className="relay-cost-line">
         <span className="relay-cost-label">近30天</span>
-        <strong className="relay-cost-value">{formatUsd(cost30d, 4)}</strong>
+        <strong
+          className="relay-cost-value"
+          data-tooltip={amountTooltip(cost30d, usage, amountUnit)}
+        >
+          {formatAmount(cost30d, 4, isQuotaUnit)}
+        </strong>
       </div>
       {quota ? (
         <div className="relay-quota">
           <div className="relay-cost-line">
             <span className="relay-cost-label">额度</span>
-            <strong className={`relay-cost-value ${quota.tone}`}>{formatUsd(quota.used, 2)} / {formatUsd(quota.limit, 2)}</strong>
+            <strong
+              className={`relay-cost-value ${quota.tone}`}
+              data-tooltip={`单位：${amountUnit}`}
+            >
+              {formatAmount(quota.used, 2, isQuotaUnit)} / {formatAmount(quota.limit, 2, isQuotaUnit)}
+            </strong>
           </div>
           <div className={`relay-quota-track ${quota.tone}`}>
             <span style={{ width: `${quota.percent}%` }} />
           </div>
         </div>
+      ) : usage.unlimited_quota ? (
+        <div className="relay-cost-line">
+          <span className="relay-cost-label">额度</span>
+          <strong className="relay-cost-value">无限制</strong>
+        </div>
       ) : usage.balance !== null ? (
         <div className="relay-cost-line">
           <span className="relay-cost-label">余额</span>
-          <strong className="relay-cost-value">{formatUsd(usage.balance, 2)}</strong>
+          <strong className="relay-cost-value">{formatAmount(usage.balance, 2, isQuotaUnit)}</strong>
         </div>
       ) : usage.remaining !== null ? (
         <div className="relay-cost-line">
           <span className="relay-cost-label">可用</span>
-          <strong className="relay-cost-value">{formatUsd(usage.remaining, 2)}</strong>
+          <strong className="relay-cost-value">{formatAmount(usage.remaining, 2, isQuotaUnit)}</strong>
         </div>
       ) : null}
+      {(requestCount !== null || usage.remote_last_model || lastRequestAt) && (
+        <div className="relay-request-meta" data-tooltip="来自中转站远端日志（最多最近 1000 条）；本地 Logger 仅记录本机代理请求">
+          {requestCount !== null && <span>远端请求 {requestCount.toLocaleString()}</span>}
+          {usage.remote_last_model && <span>{usage.remote_last_model}</span>}
+          {lastRequestAt && <span>最近 {formatDateTime(lastRequestAt)}</span>}
+        </div>
+      )}
+      {usage.expires_at && usage.expires_at > 0 && (
+        <div className="relay-unit-note">到期 {formatShortTime(usage.expires_at)}</div>
+      )}
+      {isQuotaUnit && usage.quota_per_unit && usage.quota_per_unit > 0 && (
+        <div className="relay-unit-note">1 美元约 {usage.quota_per_unit.toLocaleString()} 单位</div>
+      )}
     </div>
   )
 }
@@ -106,9 +175,33 @@ function finiteNumber(value: number | null) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-function formatUsd(value: number | null, digits: number) {
+function finiteCount(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : null
+}
+
+function formatAmount(value: number | null, digits: number, quotaUnit: boolean) {
   const amount = finiteNumber(value)
-  return amount === null ? '-' : `$${amount.toFixed(digits)}`
+  if (amount === null) return '-'
+  if (!quotaUnit) return `$${amount.toFixed(digits)}`
+  if (Math.abs(amount) >= 1_000_000) return `${(amount / 1_000_000).toFixed(2)}M`
+  if (Math.abs(amount) >= 1_000) return `${(amount / 1_000).toFixed(1)}K`
+  return amount.toFixed(digits)
+}
+
+function amountTooltip(
+  value: number | null,
+  usage: RelayUsageSummary,
+  unit: string,
+) {
+  const amount = finiteNumber(value)
+  if (amount === null) return undefined
+  if (usage.unit !== 'quota' || !usage.quota_per_unit || usage.quota_per_unit <= 0) {
+    return `单位：${unit}`
+  }
+  const approximateUsd = amount / usage.quota_per_unit
+  return `${amount.toLocaleString()} ${unit}，按站点换算约 $${approximateUsd.toFixed(6)}`
 }
 
 function friendlyRelayError(error: string) {

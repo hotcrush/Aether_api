@@ -25,12 +25,31 @@ export interface Account {
   models: string[]
   weight: number
   concurrency: number
+  rate_multiplier: number
+  auto_sync_rate_multiplier: boolean
   status: AccountStatus
   last_error: string
   last_used_at: string | null
   request_count: number
   created_at: string
   updated_at: string
+}
+
+export interface CostGuardSettings {
+  enabled: boolean
+  max_cost_multiplier: number
+  safety_buffer: number
+}
+
+export interface OutboundProxySettings {
+  enabled: boolean
+  url: string
+}
+
+export interface OpenAIAuthorization {
+  authUrl: string
+  sessionId: string
+  state: string
 }
 
 export interface ProxyInfo {
@@ -232,6 +251,16 @@ export interface RelayUsageSummary {
   plan: string | null
   mode: string
   fetched_at: number | string
+  /** `quota` is New API's site-defined integer unit; generic relays use `usd`. */
+  provider?: 'generic' | 'new_api' | string
+  unit?: 'usd' | 'quota' | string
+  quota_per_unit?: number | null
+  unlimited_quota?: boolean
+  expires_at?: number | null
+  token_name?: string | null
+  remote_request_count?: number | null
+  remote_last_request_at?: number | null
+  remote_last_model?: string | null
 }
 
 export type RelayUsageQueryState =

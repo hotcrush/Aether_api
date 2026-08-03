@@ -13,6 +13,7 @@ import { DailyBudgetDialog } from './components/DailyBudgetDialog'
 import { ImportDialog } from './components/ImportDialog'
 import { LoggerPage } from './components/LoggerPage'
 import { MarketMonitorPage, type MarketSection } from './components/MarketMonitorPage'
+import { OpenAIOAuthDialog } from './components/OpenAIOAuthDialog'
 import { SettingsPage } from './components/SettingsPage'
 import { PageImportDropZone } from './components/PageImportDropZone'
 import { ProxyPanel } from './components/ProxyPanel'
@@ -46,6 +47,9 @@ import {
   setAccountStatus,
   setAccountPriority,
   setAccountConcurrency,
+  setAccountAutoSyncRateMultiplier,
+  setAccountRateMultiplier,
+  syncAccountRateMultiplier,
   testAccount,
 } from './lib/commands'
 import { getChannelMonitorSnapshot, probeChannel } from './lib/channelMonitor'
@@ -103,6 +107,7 @@ import type {
   CodexSessionHistoryStatus,
   CodexTakeoverStatus,
   ClipboardImportCandidate,
+  OpenAIAuthorization,
   ProxyInfo,
   QuotaRateLimit,
   QuotaQueryState,
@@ -141,6 +146,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState<'all' | AccountStatus>('all')
   const [typeFilter, setTypeFilter] = useState<AccountTypeFilter>('all')
   const [importOpen, setImportOpen] = useState(false)
+  const [openaiOauthOpen, setOpenaiOauthOpen] = useState(false)
   const [importFiles, setImportFiles] = useState<File[]>([])
   const [clipboardCandidates, setClipboardCandidates] = useState<ClipboardImportCandidate[]>([])
   const [relayOpen, setRelayOpen] = useState(false)
@@ -181,10 +187,11 @@ export default function App() {
   const clipboardCandidateIds = useRef(new Set<string>())
   const clipboardImportBusyId = useRef<string | null>(null)
   const monitorLoadInFlight = useRef(false)
+  const pendingOpenAIOAuthStates = useRef(new Set<string>())
   const currentWorkspaceTab = getActiveWorkspaceTab(tabState)
   const activeTab = currentWorkspaceTab.kind === 'internal' ? currentWorkspaceTab.page : null
   const blockingDialogOpen = Boolean(
-    importOpen || relayOpen || deleteTarget || resetKeyOpen || dailyBudgetOpen || trashOpen,
+    importOpen || relayOpen || openaiOauthOpen || deleteTarget || resetKeyOpen || dailyBudgetOpen || trashOpen,
   )
   const queuedClipboardCandidate = clipboardCandidates[0] ?? null
   const clipboardCandidate = blockingDialogOpen || tabPickerOpen
@@ -213,6 +220,20 @@ export default function App() {
       title: title?.trim() || parsed.hostname,
       source: { kind: 'manual' },
     }))
+  }, [])
+  const openOpenAIAuthorization = useCallback((authorization: OpenAIAuthorization) => {
+    const parsed = parseHttpUrl(authorization.authUrl)
+    const oauthState = authorization.state.trim()
+    if (!parsed || !oauthState) throw new Error('OpenAI 授权链接无效')
+
+    pendingOpenAIOAuthStates.current.add(oauthState)
+    setTabState((current) => openWebWorkspaceTab(current, {
+      url: parsed.href,
+      title: 'OpenAI 授权',
+      reuseKey: `openai-oauth:${oauthState}`,
+      source: { kind: 'oauth', id: oauthState },
+    }))
+    setOpenaiOauthOpen(false)
   }, [])
 
   useEffect(() => {
@@ -318,6 +339,60 @@ export default function App() {
     await loadCodexTakeover().catch(() => undefined)
     await loadCodexSessionHistory().catch(() => undefined)
   }, [loadAccounts, loadProxy, loadCodexTakeover, loadCodexSessionHistory])
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+
+    let disposed = false
+    let stopListening: (() => void) | undefined
+    void listen<{ state?: string; error?: string; account?: Account }>(
+      'openai-oauth-complete',
+      ({ payload }) => {
+        if (disposed) return
+        const oauthState = payload.state?.trim()
+        if (!oauthState || !pendingOpenAIOAuthStates.current.delete(oauthState)) return
+
+        setTabState((current) => {
+          const oauthTab = current.tabs.find(
+            (tab) => tab.kind === 'web'
+              && tab.source?.kind === 'oauth'
+              && tab.source.id === oauthState,
+          )
+          const withoutAuthorizationTab = oauthTab
+            ? closeWorkspaceTab(current, oauthTab.id)
+            : current
+          return openInternalWorkspaceTab(withoutAuthorizationTab, 'upstreams')
+        })
+
+        if (payload.error) {
+          notify(payload.error, true)
+          setOpenaiOauthOpen(true)
+          return
+        }
+
+        void refreshData()
+          .then(() => {
+            const accountName = payload.account?.name.trim()
+            notify(accountName
+              ? `OpenAI 账号“${accountName}”已添加`
+              : 'OpenAI 账号已添加')
+          })
+          .catch((error) => notify(`账号已添加，但列表刷新失败：${errorText(error)}`, true))
+      },
+    )
+      .then((unlisten) => {
+        if (disposed) unlisten()
+        else stopListening = unlisten
+      })
+      .catch((error) => {
+        if (!disposed) notify(`无法监听 OpenAI 授权回调：${errorText(error)}`, true)
+      })
+
+    return () => {
+      disposed = true
+      stopListening?.()
+    }
+  }, [notify, refreshData])
 
   const setActionBusy = useCallback((key: string, busy: boolean) => {
     setBusyActions((current) => {
@@ -838,6 +913,50 @@ export default function App() {
     }
   }
 
+  const updateRateMultiplier = async (account: Account, multiplier: number) => {
+    const actionKey = `rate-multiplier:${account.id}`
+    setActionBusy(actionKey, true)
+    try {
+      const updated = await setAccountRateMultiplier(account.id, multiplier)
+      if (!updated) throw new Error('上游不存在或正在自动同步')
+      await refreshData()
+      notify('成本倍率已更新')
+    } catch (error) {
+      notify(errorText(error), true)
+    } finally {
+      setActionBusy(actionKey, false)
+    }
+  }
+
+  const setAutoSyncRateMultiplier = async (account: Account, enabled: boolean) => {
+    const actionKey = `rate-multiplier:${account.id}`
+    setActionBusy(actionKey, true)
+    try {
+      const updated = await setAccountAutoSyncRateMultiplier(account.id, enabled)
+      if (!updated) throw new Error('仅配置了 Base URL 的 API Key 中转站支持倍率同步')
+      await refreshData()
+      notify(enabled ? '已开启自动倍率同步' : '已关闭自动倍率同步')
+    } catch (error) {
+      notify(errorText(error), true)
+    } finally {
+      setActionBusy(actionKey, false)
+    }
+  }
+
+  const syncRateMultiplier = async (account: Account) => {
+    const actionKey = `rate-multiplier:${account.id}`
+    setActionBusy(actionKey, true)
+    try {
+      const multiplier = await syncAccountRateMultiplier(account.id)
+      await refreshData()
+      notify(`已同步成本倍率 ×${multiplier}`)
+    } catch (error) {
+      notify(errorText(error), true)
+    } finally {
+      setActionBusy(actionKey, false)
+    }
+  }
+
   const refreshAll = async () => {
     setActionBusy('refresh-all', true)
     try {
@@ -1271,6 +1390,7 @@ export default function App() {
           }}
           onExport={exportBackup}
           onAddRelay={() => setRelayOpen(true)}
+          onAddOAuth={() => setOpenaiOauthOpen(true)}
           onRemoveErrors={removeErrorAccounts}
         />
 
@@ -1292,6 +1412,9 @@ export default function App() {
           onRelayUsage={queryRelayUsage}
           onPriority={updatePriority}
           onConcurrency={updateConcurrency}
+          onRateMultiplier={updateRateMultiplier}
+          onAutoSyncRateMultiplier={setAutoSyncRateMultiplier}
+          onSyncRateMultiplier={syncRateMultiplier}
           onDelete={setDeleteTarget}
         />
       </main>
@@ -1358,6 +1481,12 @@ export default function App() {
         open={relayOpen}
         onClose={() => setRelayOpen(false)}
         onSaved={refreshData}
+        notify={notify}
+      />
+      <OpenAIOAuthDialog
+        open={openaiOauthOpen}
+        onClose={() => setOpenaiOauthOpen(false)}
+        onAuthorizationReady={openOpenAIAuthorization}
         notify={notify}
       />
       <DeleteAccountDialog

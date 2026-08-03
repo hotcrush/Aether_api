@@ -36,6 +36,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
 use crate::capacity::{CapacityLease, CapacityRegistry};
+use crate::cost_guard::CostGuardSettings;
 use crate::db::{Account, Db, RequestLogStart, RequestLogUsage};
 use crate::logger::RequestLogHandle;
 use crate::oauth;
@@ -264,8 +265,9 @@ struct WeightedSchedule {
 
 pub struct ProxyState {
     pub db: Arc<Db>,
-    pub client: reqwest::Client,
+    pub client: Arc<arc_swap::ArcSwap<reqwest::Client>>,
     pub access_token: Arc<arc_swap::ArcSwap<String>>,
+    pub cost_guard: Arc<arc_swap::ArcSwap<CostGuardSettings>>,
     app_handle: Option<tauri::AppHandle>,
     capacity: Arc<CapacityRegistry>,
     cooldowns: Cache<CooldownKey, Instant>,
@@ -330,6 +332,9 @@ impl ProxyState {
         let available = accounts
             .into_iter()
             .filter_map(|account| {
+                if !self.cost_guard.load().allows(account.rate_multiplier) {
+                    return None;
+                }
                 let generic_until =
                     self.active_block_until(&self.cooldowns, &account.id, capability, now);
                 let stream_until = (!ignore_stream_quarantines)
@@ -619,12 +624,15 @@ pub async fn start_proxy_server(
     access_token: Arc<arc_swap::ArcSwap<String>>,
     running: Arc<AtomicBool>,
     capacity: Arc<CapacityRegistry>,
+    cost_guard: Arc<arc_swap::ArcSwap<CostGuardSettings>>,
+    client: Arc<arc_swap::ArcSwap<reqwest::Client>>,
     app_handle: tauri::AppHandle,
 ) {
     let state = Arc::new(ProxyState {
         db,
-        client: crate::dns::build_client(600, 15),
+        client,
         access_token,
+        cost_guard,
         app_handle: Some(app_handle),
         capacity,
         cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),

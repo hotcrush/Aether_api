@@ -171,6 +171,9 @@ fn account_from_classified_value(
             "models",
             "weight",
             "concurrency",
+            "rate_multiplier",
+            "upstream_billing_rate_sync_enabled",
+            "extra",
         ],
     };
     object.retain(|field, _| allowed_fields.contains(&field.as_str()));
@@ -207,6 +210,9 @@ fn account_from_classified_value(
             "models",
         ];
         credentials.retain(|field, _| ALLOWED_CREDENTIAL_FIELDS.contains(&field.as_str()));
+        if let Some(extra) = object.get_mut("extra").and_then(Value::as_object_mut) {
+            extra.retain(|field, _| field == "upstream_billing_rate_sync_enabled");
+        }
     }
 
     let account = account_from_value(value)?;
@@ -534,6 +540,20 @@ fn account_from_value(value: Value) -> Result<NewAccount, String> {
         .filter(|value| !value.is_null())
         .map(parse_concurrency)
         .transpose()?;
+    let rate_multiplier = first_value(&value, &[&["rate_multiplier"]])
+        .filter(|value| !value.is_null())
+        .map(parse_rate_multiplier)
+        .transpose()?;
+    let auto_sync_rate_multiplier = first_value(
+        &value,
+        &[
+            &["upstream_billing_rate_sync_enabled"],
+            &["extra", "upstream_billing_rate_sync_enabled"],
+        ],
+    )
+    .filter(|value| !value.is_null())
+    .map(parse_bool)
+    .transpose()?;
 
     let name = first_string(
         &value,
@@ -551,6 +571,8 @@ fn account_from_value(value: Value) -> Result<NewAccount, String> {
             models,
             weight,
             concurrency,
+            rate_multiplier,
+            auto_sync_rate_multiplier,
             base_url: first_string(
                 &value,
                 &[&["credentials", "base_url"], &["base_url"], &["baseUrl"]],
@@ -861,6 +883,32 @@ fn parse_concurrency(value: &Value) -> Result<i64, String> {
     Ok(if parsed == 0 { 1000 } else { parsed.min(1000) })
 }
 
+fn parse_rate_multiplier(value: &Value) -> Result<f64, String> {
+    let parsed = value
+        .as_f64()
+        .or_else(|| {
+            value
+                .as_str()
+                .and_then(|raw| raw.trim().parse::<f64>().ok())
+        })
+        .ok_or_else(|| "rate_multiplier 必须是数字".to_string())?;
+    if !parsed.is_finite() || !(0.0..=100.0).contains(&parsed) {
+        return Err("rate_multiplier 必须在 0 到 100 之间".to_string());
+    }
+    Ok(parsed)
+}
+
+fn parse_bool(value: &Value) -> Result<bool, String> {
+    value
+        .as_bool()
+        .or_else(|| match value.as_str().map(str::trim) {
+            Some("true") | Some("1") => Some(true),
+            Some("false") | Some("0") => Some(false),
+            _ => None,
+        })
+        .ok_or_else(|| "upstream_billing_rate_sync_enabled 必须是布尔值".to_string())
+}
+
 fn non_empty_or(value: String, fallback: &str) -> String {
     if value.is_empty() {
         fallback.to_string()
@@ -892,6 +940,29 @@ mod tests {
         assert_eq!(accounts[1].weight, Some(3));
         assert_eq!(accounts[0].models, None);
         assert_eq!(accounts[0].weight, None);
+    }
+
+    #[test]
+    fn imports_sub2api_rate_multiplier_and_sync_flag() {
+        let contents = vec![r#"{
+            "type":"sub2api-data",
+            "accounts":[{
+                "name":"metered relay",
+                "platform":"openai",
+                "type":"apikey",
+                "rate_multiplier":1.25,
+                "extra":{"upstream_billing_rate_sync_enabled":true},
+                "credentials":{"api_key":"sk-test","base_url":"https://relay.example/v1"}
+            }]
+        }"#
+        .to_string()];
+
+        let (accounts, errors) = parse_import_contents(&contents);
+
+        assert!(errors.is_empty());
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].rate_multiplier, Some(1.25));
+        assert_eq!(accounts[0].auto_sync_rate_multiplier, Some(true));
     }
 
     #[test]

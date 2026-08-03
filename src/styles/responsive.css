@@ -241,6 +241,13 @@
     padding: 0 13px 7px 4px;
   }
 
+  td.col-rate-multiplier {
+    grid-column: 1;
+    grid-row: 4;
+    justify-self: start;
+    padding: 0 13px 8px;
+  }
+
   td.col-actions {
     grid-column: 2;
     grid-row: 4;

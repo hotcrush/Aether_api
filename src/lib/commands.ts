@@ -10,7 +10,10 @@ import type {
   CodexSessionHistoryStatus,
   CodexTakeoverStatus,
   ClipboardImportCandidate,
+  CostGuardSettings,
   ImportResult,
+  OpenAIAuthorization,
+  OutboundProxySettings,
   ProxyInfo,
   RelayUsageSummary,
   RequestLog,
@@ -41,6 +44,8 @@ let previewAccounts: Account[] = [
     models: [],
     weight: 1,
     concurrency: 10,
+    rate_multiplier: 1,
+    auto_sync_rate_multiplier: false,
     status: 'active',
     last_error: '',
     last_used_at: '今天 20:48',
@@ -64,6 +69,8 @@ let previewAccounts: Account[] = [
     models: [],
     weight: 1,
     concurrency: 6,
+    rate_multiplier: 1,
+    auto_sync_rate_multiplier: false,
     status: 'active',
     last_error: '',
     last_used_at: '昨天 18:20',
@@ -87,6 +94,8 @@ let previewAccounts: Account[] = [
     models: ['gpt-5', 'gpt-5-mini', 'o3'],
     weight: 3,
     concurrency: 20,
+    rate_multiplier: 1.2,
+    auto_sync_rate_multiplier: true,
     status: 'active',
     last_error: '',
     last_used_at: '07-28 09:16',
@@ -110,6 +119,8 @@ let previewAccounts: Account[] = [
     models: [],
     weight: 1,
     concurrency: 4,
+    rate_multiplier: 1,
+    auto_sync_rate_multiplier: false,
     status: 'disabled',
     last_error: '上次测试：OAuth token 已失效',
     last_used_at: null,
@@ -388,6 +399,8 @@ function previewRelayUsage(): RelayUsageSummary {
     plan: '团队套餐',
     mode: 'quota_limited',
     fetched_at: Date.now(),
+    provider: 'generic',
+    unit: 'usd',
   }
 }
 
@@ -483,6 +496,38 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       if (target) target.concurrency = args?.concurrency as number
       return Boolean(target) as T
     }
+    case 'set_account_rate_multiplier': {
+      const target = previewAccounts.find((account) => account.id === args?.id)
+      if (target) target.rate_multiplier = args?.multiplier as number
+      return Boolean(target) as T
+    }
+    case 'set_account_auto_sync_rate_multiplier': {
+      const target = previewAccounts.find((account) => account.id === args?.id)
+      if (target) target.auto_sync_rate_multiplier = Boolean(args?.enabled)
+      return Boolean(target) as T
+    }
+    case 'sync_account_rate_multiplier': {
+      const target = previewAccounts.find((account) => account.id === args?.id)
+      if (!target?.auto_sync_rate_multiplier) throw new Error('请先开启该中转站的自动倍率同步')
+      target.rate_multiplier = 1.2
+      return target.rate_multiplier as T
+    }
+    case 'begin_openai_oauth':
+      return {
+        authUrl: 'https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann',
+        sessionId: 'preview-openai-oauth',
+        state: 'preview-openai-oauth-state',
+      } as T
+    case 'get_cost_guard_settings':
+      return JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}cost-guard`) ?? '{"enabled":false,"max_cost_multiplier":1,"safety_buffer":0}') as T
+    case 'update_cost_guard_settings':
+      window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}cost-guard`, JSON.stringify(args?.settings))
+      return args?.settings as T
+    case 'get_outbound_proxy_settings':
+      return JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}outbound-proxy`) ?? '{"enabled":false,"url":"http://127.0.0.1:7890"}') as T
+    case 'update_outbound_proxy_settings':
+      window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}outbound-proxy`, JSON.stringify(args?.settings))
+      return args?.settings as T
     case 'delete_account': {
       const previousLength = previewAccounts.length
       previewAccounts = previewAccounts.filter((account) => account.id !== args?.id)
@@ -641,6 +686,28 @@ export const setAccountPriority = (id: string, priority: number) =>
 
 export const setAccountConcurrency = (id: string, concurrency: number) =>
   call<boolean>('set_account_concurrency', { id, concurrency })
+
+export const setAccountRateMultiplier = (id: string, multiplier: number) =>
+  call<boolean>('set_account_rate_multiplier', { id, multiplier })
+
+export const setAccountAutoSyncRateMultiplier = (id: string, enabled: boolean) =>
+  call<boolean>('set_account_auto_sync_rate_multiplier', { id, enabled })
+
+export const syncAccountRateMultiplier = (id: string) =>
+  call<number>('sync_account_rate_multiplier', { id })
+
+export const beginOpenAIOAuth = (name: string, priority: number) =>
+  call<OpenAIAuthorization>('begin_openai_oauth', { name, priority })
+
+export const getCostGuardSettings = () => call<CostGuardSettings>('get_cost_guard_settings')
+
+export const updateCostGuardSettings = (settings: CostGuardSettings) =>
+  call<CostGuardSettings>('update_cost_guard_settings', { settings })
+
+export const getOutboundProxySettings = () => call<OutboundProxySettings>('get_outbound_proxy_settings')
+
+export const updateOutboundProxySettings = (settings: OutboundProxySettings) =>
+  call<OutboundProxySettings>('update_outbound_proxy_settings', { settings })
 
 export const deleteAccount = (id: string) =>
   call<boolean>('delete_account', { id })

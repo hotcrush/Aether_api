@@ -34,6 +34,7 @@ interface AccountToolbarProps {
   onQueryAll: () => void
   onExport: () => void
   onAddRelay: () => void
+  onAddOAuth: () => void
   onRemoveErrors: () => void
 }
 
@@ -57,6 +58,7 @@ export function AccountToolbar({
   onQueryAll,
   onExport,
   onAddRelay,
+  onAddOAuth,
   onRemoveErrors,
 }: AccountToolbarProps) {
   const [usageMenuOpen, setUsageMenuOpen] = useState(false)
@@ -261,6 +263,9 @@ export function AccountToolbar({
           </div>
         )}
       </div>
+      <button className="btn" onClick={onAddOAuth} data-tooltip="添加 OpenAI 账号">
+        <Plus size={16} />添加账号
+      </button>
       <button className="btn btn-primary" onClick={onAddRelay} data-tooltip="添加中转站">
         <Plus size={16} />添加中转站
       </button>

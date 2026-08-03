@@ -5,8 +5,11 @@ use tower::ServiceExt;
 fn test_state() -> ProxyState {
     ProxyState {
         db: Arc::new(Db::new(std::path::Path::new(":memory:")).unwrap()),
-        client: reqwest::Client::new(),
+        client: Arc::new(arc_swap::ArcSwap::new(Arc::new(reqwest::Client::new()))),
         access_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(String::new()))),
+        cost_guard: Arc::new(arc_swap::ArcSwap::new(Arc::new(
+            CostGuardSettings::default(),
+        ))),
         app_handle: None,
         capacity: Arc::new(CapacityRegistry::default()),
         cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),
@@ -49,6 +52,8 @@ fn scheduling_account(id: &str, priority: i64) -> Account {
         models: Vec::new(),
         weight: 1,
         concurrency: 10,
+        rate_multiplier: 1.0,
+        auto_sync_rate_multiplier: false,
         chatgpt_account_id: String::new(),
         chatgpt_user_id: String::new(),
         email: String::new(),
@@ -62,6 +67,29 @@ fn scheduling_account(id: &str, priority: i64) -> Account {
         created_at: id.to_string(),
         updated_at: id.to_string(),
     }
+}
+
+#[test]
+fn cost_guard_respects_rate_multiplier_and_safety_buffer() {
+    let state = test_state();
+    state.cost_guard.store(Arc::new(CostGuardSettings {
+        enabled: true,
+        max_cost_multiplier: 1.5,
+        safety_buffer: 0.1,
+    }));
+    let mut allowed = scheduling_account("allowed", 1);
+    allowed.rate_multiplier = 1.35;
+    let mut excluded = scheduling_account("excluded", 1);
+    excluded.rate_multiplier = 1.36;
+
+    let (ordered, _) = state.ordered_accounts(
+        vec![excluded, allowed],
+        None,
+        &responses_capability("gpt-5"),
+    );
+
+    assert_eq!(ordered.len(), 1);
+    assert_eq!(ordered[0].id, "allowed");
 }
 
 #[test]

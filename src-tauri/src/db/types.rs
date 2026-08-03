@@ -29,6 +29,8 @@ pub struct Account {
     #[serde(default = "default_weight")]
     pub weight: i64,
     pub concurrency: i64,
+    pub rate_multiplier: f64,
+    pub auto_sync_rate_multiplier: bool,
     pub status: String,
     pub last_error: String,
     pub last_used_at: Option<String>,
@@ -57,6 +59,10 @@ pub struct NewAccount {
     pub models: Option<Vec<String>>,
     pub weight: Option<i64>,
     pub concurrency: Option<i64>,
+    /// `None` keeps the existing value during upsert.
+    pub rate_multiplier: Option<f64>,
+    /// `None` keeps the existing value during upsert.
+    pub auto_sync_rate_multiplier: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

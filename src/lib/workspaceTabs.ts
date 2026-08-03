@@ -24,7 +24,7 @@ export interface WebWorkspaceTab {
   source?: WebWorkspaceTabSource
 }
 
-export type WebWorkspaceTabSourceKind = 'market' | 'relay' | 'manual'
+export type WebWorkspaceTabSourceKind = 'market' | 'relay' | 'oauth' | 'manual'
 
 export interface WebWorkspaceTabSource {
   kind: WebWorkspaceTabSourceKind

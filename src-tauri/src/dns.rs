@@ -91,13 +91,23 @@ impl Resolve for TrustedDns {
     }
 }
 
-/// 创建带自定义 DNS 的 reqwest Client
-pub fn build_client(timeout_secs: u64, connect_timeout_secs: u64) -> reqwest::Client {
+/// 创建带自定义 DNS 和可选出站代理的 reqwest Client。
+pub fn build_client(
+    timeout_secs: u64,
+    connect_timeout_secs: u64,
+    proxy_url: Option<&str>,
+) -> Result<reqwest::Client, String> {
     let dns = Arc::new(TrustedDns::new());
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .dns_resolver(dns)
         .timeout(std::time::Duration::from_secs(timeout_secs))
-        .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs))
+        .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs));
+    if let Some(proxy_url) = proxy_url {
+        let proxy =
+            reqwest::Proxy::all(proxy_url).map_err(|error| format!("出站代理地址无效: {error}"))?;
+        builder = builder.proxy(proxy);
+    }
+    builder
         .build()
-        .expect("初始化 HTTP 客户端失败")
+        .map_err(|error| format!("初始化 HTTP 客户端失败: {error}"))
 }

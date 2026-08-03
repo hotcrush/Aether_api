@@ -10,7 +10,8 @@ pub(super) fn query_active_accounts(conn: &Connection) -> SqlResult<Vec<Account>
         "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
                 client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                 expires_at, priority, models, weight, status, last_error, last_used_at,
-                request_count, created_at, updated_at, concurrency
+                request_count, created_at, updated_at, concurrency, rate_multiplier,
+                auto_sync_rate_multiplier
            FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
     )?;
     let rows = stmt.query_map([], account_from_row)?;
@@ -23,7 +24,8 @@ impl Db {
             "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
-                    request_count, created_at, updated_at, concurrency
+                    request_count, created_at, updated_at, concurrency, rate_multiplier,
+                    auto_sync_rate_multiplier
                FROM accounts WHERE deleted_at IS NULL
               ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, priority, created_at DESC",
             [],
@@ -35,7 +37,8 @@ impl Db {
             "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
-                    request_count, created_at, updated_at, concurrency
+                    request_count, created_at, updated_at, concurrency, rate_multiplier,
+                    auto_sync_rate_multiplier
                FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
             [],
         )
@@ -52,7 +55,8 @@ impl Db {
                     "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
                             client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                             expires_at, priority, models, weight, status, last_error, last_used_at,
-                            request_count, created_at, updated_at, concurrency
+                            request_count, created_at, updated_at, concurrency, rate_multiplier,
+                            auto_sync_rate_multiplier
                        FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
                 )?;
                 let rows = stmt.query_map([], account_from_row)?;
@@ -71,7 +75,8 @@ impl Db {
             "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
-                    request_count, created_at, updated_at, concurrency
+                    request_count, created_at, updated_at, concurrency, rate_multiplier,
+                    auto_sync_rate_multiplier
                FROM accounts WHERE id = ?1 AND deleted_at IS NULL",
             [id],
             account_from_row,
@@ -92,6 +97,8 @@ impl Db {
     pub fn upsert_account(&self, account: &NewAccount) -> SqlResult<(Account, UpsertAction)> {
         let weight = validate_weight(account.weight)?;
         let concurrency = validate_concurrency(account.concurrency)?;
+        let rate_multiplier = validate_rate_multiplier(account.rate_multiplier)?;
+        let auto_sync_rate_multiplier = account.auto_sync_rate_multiplier;
         let conn = self.conn.lock().unwrap();
         let existing_id = find_existing_id(&conn, account)?;
         let models = account.models.as_deref().map(models_to_storage);
@@ -116,6 +123,8 @@ impl Db {
                     models = COALESCE(?16, models),
                     weight = COALESCE(?17, weight),
                     concurrency = COALESCE(?18, concurrency),
+                    rate_multiplier = COALESCE(?19, rate_multiplier),
+                    auto_sync_rate_multiplier = COALESCE(?20, auto_sync_rate_multiplier),
                     status = 'active', deleted_at = NULL, last_error = '',
                     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
                   WHERE id = ?1",
@@ -138,6 +147,8 @@ impl Db {
                     models,
                     weight,
                     concurrency,
+                    rate_multiplier,
+                    auto_sync_rate_multiplier,
                 ],
             )?;
             UpsertAction::Updated
@@ -152,8 +163,9 @@ impl Db {
                 "INSERT INTO accounts (
                     id, name, account_type, api_key, access_token, refresh_token, id_token,
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
-                    expires_at, priority, models, weight, concurrency, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                    expires_at, priority, models, weight, concurrency, rate_multiplier,
+                    auto_sync_rate_multiplier, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
                             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
                 rusqlite::params![
                     id,
@@ -174,6 +186,8 @@ impl Db {
                     models.unwrap_or_default(),
                     weight.unwrap_or(1),
                     concurrency.unwrap_or(10),
+                    rate_multiplier.unwrap_or(1.0),
+                    auto_sync_rate_multiplier.unwrap_or(false),
                 ],
             )?;
             UpsertAction::Created
@@ -184,7 +198,8 @@ impl Db {
             "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
-                    request_count, created_at, updated_at, concurrency
+                    request_count, created_at, updated_at, concurrency, rate_multiplier,
+                    auto_sync_rate_multiplier
                FROM accounts WHERE id = ?1",
             [id],
             account_from_row,
@@ -238,7 +253,8 @@ impl Db {
             "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
-                    request_count, created_at, updated_at, concurrency
+                    request_count, created_at, updated_at, concurrency, rate_multiplier,
+                    auto_sync_rate_multiplier
                FROM accounts WHERE deleted_at IS NOT NULL
               ORDER BY deleted_at DESC",
             [],
@@ -292,6 +308,55 @@ impl Db {
         )? > 0)
     }
 
+    pub fn set_rate_multiplier(&self, id: &str, multiplier: f64) -> SqlResult<bool> {
+        validate_rate_multiplier(Some(multiplier))?;
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute(
+            "UPDATE accounts SET rate_multiplier = ?1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              WHERE id = ?2 AND deleted_at IS NULL AND auto_sync_rate_multiplier = 0",
+            rusqlite::params![multiplier, id],
+        )? > 0)
+    }
+
+    pub fn set_auto_sync_rate_multiplier(&self, id: &str, enabled: bool) -> SqlResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute(
+            "UPDATE accounts SET auto_sync_rate_multiplier = ?1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              WHERE id = ?2 AND deleted_at IS NULL AND account_type = 'api_key' AND base_url <> ''",
+            rusqlite::params![enabled, id],
+        )? > 0)
+    }
+
+    /// Stores an upstream-probed multiplier only while the managed sync flag remains enabled.
+    pub fn set_rate_multiplier_from_sync(&self, id: &str, multiplier: f64) -> SqlResult<bool> {
+        validate_rate_multiplier(Some(multiplier))?;
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute(
+            "UPDATE accounts SET rate_multiplier = ?1,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              WHERE id = ?2 AND deleted_at IS NULL AND auto_sync_rate_multiplier = 1",
+            rusqlite::params![multiplier, id],
+        )? > 0)
+    }
+
+    pub fn list_rate_sync_accounts(&self) -> SqlResult<Vec<Account>> {
+        self.query_accounts(
+            "SELECT id, name, account_type, api_key, access_token, refresh_token, id_token,
+                    client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
+                    expires_at, priority, models, weight, status, last_error, last_used_at,
+                    request_count, created_at, updated_at, concurrency, rate_multiplier,
+                    auto_sync_rate_multiplier
+               FROM accounts
+              WHERE status = 'active' AND deleted_at IS NULL
+                AND account_type = 'api_key' AND api_key <> '' AND base_url <> ''
+                AND auto_sync_rate_multiplier = 1
+              ORDER BY priority, created_at",
+            [],
+        )
+    }
+
     pub fn export_data(&self) -> SqlResult<Value> {
         let accounts = self.list_accounts()?;
         let data = accounts
@@ -323,6 +388,12 @@ impl Db {
                     "models": account.models,
                     "weight": account.weight,
                     "concurrency": account.concurrency,
+                    "rate_multiplier": account.rate_multiplier,
+                    "extra": if account.auto_sync_rate_multiplier {
+                        json!({"upstream_billing_rate_sync_enabled": true})
+                    } else {
+                        json!({})
+                    },
                     "credentials": credentials,
                 })
             })
@@ -376,6 +447,11 @@ fn account_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Account> {
             .get::<_, Option<i64>>(23)?
             .filter(|concurrency| (1..=1000).contains(concurrency))
             .unwrap_or(10),
+        rate_multiplier: row
+            .get::<_, Option<f64>>(24)?
+            .filter(|multiplier| multiplier.is_finite() && (0.0..=100.0).contains(multiplier))
+            .unwrap_or(1.0),
+        auto_sync_rate_multiplier: row.get::<_, Option<bool>>(25)?.unwrap_or(false),
         status: row.get(17)?,
         last_error: row.get(18)?,
         last_used_at: row.get(19)?,
@@ -440,6 +516,17 @@ fn validate_concurrency(concurrency: Option<i64>) -> SqlResult<Option<i64>> {
         ));
     }
     Ok(concurrency)
+}
+
+fn validate_rate_multiplier(multiplier: Option<f64>) -> SqlResult<Option<f64>> {
+    if multiplier
+        .is_some_and(|multiplier| !multiplier.is_finite() || !(0.0..=100.0).contains(&multiplier))
+    {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "rate_multiplier must be between 0 and 100".to_string(),
+        ));
+    }
+    Ok(multiplier)
 }
 
 fn normalize_base_url(value: &str) -> String {

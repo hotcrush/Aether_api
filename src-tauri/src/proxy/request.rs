@@ -131,6 +131,18 @@ pub(super) async fn proxy_handler(
         );
     }
 
+    let cost_guard = state.cost_guard.load();
+    if cost_guard.enabled
+        && accounts
+            .iter()
+            .all(|account| !cost_guard.allows(account.rate_multiplier))
+    {
+        let message = "all matching upstream accounts are excluded by cost protection";
+        request_log.record_local_failure(StatusCode::SERVICE_UNAVAILABLE, message);
+        return json_error(StatusCode::SERVICE_UNAVAILABLE, message, "cost_protection");
+    }
+    drop(cost_guard);
+
     let route_key = request_route_key(&headers, &body);
     let (accounts, retry_after, stream_fail_open) =
         state.ordered_accounts_for_request(accounts, route_key, &capability);
@@ -167,6 +179,11 @@ pub(super) async fn proxy_handler(
             last_error = "all matching upstream accounts are at capacity".to_string();
             continue;
         };
+        if !state.cost_guard.load().allows(account.rate_multiplier) {
+            last_error =
+                "all matching upstream accounts are excluded by cost protection".to_string();
+            continue;
+        }
         if let Some((log, message)) = pending_retry.take() {
             log.finish("retry", Some(&message));
         }
@@ -207,9 +224,10 @@ pub(super) async fn proxy_handler(
 
         let mut refreshed_after_unauthorized = false;
         loop {
+            let client = state.client.load_full();
             let response = match tokio::time::timeout_at(
                 startup_deadline,
-                send_upstream(&state.client, &ready, &method, &uri, &headers, &body),
+                send_upstream(&client, &ready, &method, &uri, &headers, &body),
             )
             .await
             {

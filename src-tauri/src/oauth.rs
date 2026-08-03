@@ -2,10 +2,232 @@ use crate::db::{Account, NewAccount};
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 pub const OPENAI_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+pub const OPENAI_AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
+pub const OPENAI_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const REFRESH_SCOPE: &str = "openid profile email";
+const AUTHORIZE_SCOPE: &str = "openid profile email offline_access";
+const OAUTH_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
+const MAX_OAUTH_SESSIONS: usize = 12;
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAIAuthorization {
+    pub auth_url: String,
+    pub session_id: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone)]
+struct PendingAuthorization {
+    name: String,
+    priority: i64,
+    state: String,
+    code_verifier: String,
+    created_at: Instant,
+}
+
+/// Short-lived, in-memory PKCE sessions used by the manual OpenAI authorization dialog.
+pub struct OpenAIOAuthSessions {
+    pending: Mutex<HashMap<String, PendingAuthorization>>,
+}
+
+impl Default for OpenAIOAuthSessions {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl OpenAIOAuthSessions {
+    pub fn begin(&self, name: String, priority: i64) -> Result<OpenAIAuthorization, String> {
+        let session_id = uuid::Uuid::new_v4().simple().to_string();
+        let state = uuid::Uuid::new_v4().simple().to_string();
+        // The Codex client uses a hex PKCE verifier. Two UUIDs give the required
+        // entropy and stay within OAuth's 43-128 character verifier window.
+        let code_verifier = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(Sha256::digest(code_verifier.as_bytes()));
+        let auth_url = reqwest::Url::parse_with_params(
+            OPENAI_AUTHORIZE_URL,
+            &[
+                ("response_type", "code"),
+                ("client_id", OPENAI_CLIENT_ID),
+                ("redirect_uri", OPENAI_REDIRECT_URI),
+                ("scope", AUTHORIZE_SCOPE),
+                ("state", state.as_str()),
+                ("code_challenge", challenge.as_str()),
+                ("code_challenge_method", "S256"),
+                ("id_token_add_organizations", "true"),
+                ("codex_cli_simplified_flow", "true"),
+            ],
+        )
+        .map_err(|error| format!("生成 OpenAI 授权链接失败: {error}"))?
+        .to_string();
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.retain(|_, value| value.created_at.elapsed() < OAUTH_SESSION_TTL);
+        if pending.len() >= MAX_OAUTH_SESSIONS {
+            if let Some(oldest) = pending
+                .iter()
+                .min_by_key(|(_, value)| value.created_at)
+                .map(|(id, _)| id.clone())
+            {
+                pending.remove(&oldest);
+            }
+        }
+        pending.insert(
+            session_id.clone(),
+            PendingAuthorization {
+                name,
+                priority,
+                state: state.clone(),
+                code_verifier,
+                created_at: Instant::now(),
+            },
+        );
+        Ok(OpenAIAuthorization {
+            auth_url,
+            session_id,
+            state,
+        })
+    }
+
+    pub async fn complete(
+        &self,
+        client: &reqwest::Client,
+        session_id: &str,
+        callback_or_code: &str,
+    ) -> Result<NewAccount, String> {
+        let session = {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            pending.retain(|_, value| value.created_at.elapsed() < OAUTH_SESSION_TTL);
+            pending
+                .get(session_id)
+                .cloned()
+                .ok_or_else(|| "授权已过期，请重新生成授权链接".to_string())?
+        };
+        let (code, returned_state) = parse_callback_or_code(callback_or_code)?;
+        if let Some(returned_state) = returned_state {
+            if returned_state != session.state {
+                return Err("授权回调与当前授权链接不匹配，请重新开始授权".to_string());
+            }
+        }
+
+        let response = client
+            .post(OPENAI_TOKEN_URL)
+            .header("User-Agent", "codex-cli/0.144.1")
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", OPENAI_CLIENT_ID),
+                ("code", code.as_str()),
+                ("redirect_uri", OPENAI_REDIRECT_URI),
+                ("code_verifier", session.code_verifier.as_str()),
+            ])
+            .send()
+            .await
+            .map_err(|error| format!("连接 OpenAI OAuth 服务失败: {error}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            let detail = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "OpenAI 授权码兑换失败 ({status}): {}",
+                oauth_error_message(&detail)
+            ));
+        }
+        let token: TokenResponse = response
+            .json()
+            .await
+            .map_err(|error| format!("OpenAI OAuth 返回内容无效: {error}"))?;
+        if token.access_token.trim().is_empty() {
+            return Err("OpenAI OAuth 未返回 access_token".to_string());
+        }
+        let mut metadata = decode_token_metadata(&token.access_token);
+        merge_metadata(&mut metadata, decode_token_metadata(&token.id_token));
+        if metadata.expires_at.is_none() && token.expires_in > 0 {
+            metadata.expires_at = Some(chrono::Utc::now().timestamp() + token.expires_in);
+        }
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(session_id);
+        Ok(NewAccount {
+            name: session.name,
+            account_type: "oauth".to_string(),
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+            id_token: token.id_token,
+            client_id: OPENAI_CLIENT_ID.to_string(),
+            chatgpt_account_id: metadata.chatgpt_account_id,
+            chatgpt_user_id: metadata.chatgpt_user_id,
+            email: metadata.email,
+            plan_type: metadata.plan_type,
+            expires_at: metadata.expires_at,
+            priority: Some(session.priority),
+            ..NewAccount::default()
+        })
+    }
+
+    pub async fn complete_callback(
+        &self,
+        client: &reqwest::Client,
+        code: &str,
+        returned_state: &str,
+    ) -> Result<(String, NewAccount), String> {
+        let returned_state = returned_state.trim();
+        if returned_state.is_empty() {
+            return Err("授权回调缺少 state 参数".to_string());
+        }
+        let session_id = {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            pending.retain(|_, value| value.created_at.elapsed() < OAUTH_SESSION_TTL);
+            pending
+                .iter()
+                .find_map(|(id, value)| (value.state == returned_state).then(|| id.clone()))
+                .ok_or_else(|| "授权已过期或不属于当前应用，请重新开始授权".to_string())?
+        };
+        let account = self.complete(client, &session_id, code).await?;
+        Ok((session_id, account))
+    }
+}
+
+fn parse_callback_or_code(input: &str) -> Result<(String, Option<String>), String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("请粘贴授权回调链接或 code".to_string());
+    }
+    let Ok(url) = reqwest::Url::parse(input) else {
+        return Ok((input.to_string(), None));
+    };
+    let code = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "code").then(|| value.into_owned()))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "授权回调链接缺少 code 参数".to_string())?;
+    let returned_state = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()));
+    Ok((code, returned_state))
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct TokenMetadata {

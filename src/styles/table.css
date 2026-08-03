@@ -58,12 +58,13 @@ tbody tr {
 }
 
 /* Column widths */
-.col-account { width: 16%; }
+.col-account { width: 15%; }
 .col-type { width: 9%; }
 .col-credential { width: 10%; }
 .col-usage { width: 20%; }
 .col-capacity { width: 116px; }
 .col-priority { width: 82px; }
+.col-rate-multiplier { width: 122px; }
 
 th.col-capacity,
 td.col-capacity {
@@ -188,6 +189,13 @@ td.col-status {
 .error-tip-wrap {
   position: relative;
   cursor: help;
+}
+
+th.col-rate-multiplier,
+td.col-rate-multiplier {
+  padding-right: 4px;
+  padding-left: 4px;
+  text-align: center;
 }
 
 /* Badges */
@@ -436,6 +444,65 @@ td.col-status {
 .priority-save:hover:not(:disabled) {
   background: var(--primary-soft);
 }
+
+/* Upstream cost multiplier and optional Sub2API billing sync. */
+.rate-multiplier-editor {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+}
+
+.rate-multiplier-input {
+  display: flex;
+  width: 76px;
+  height: 27px;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.rate-multiplier-input:focus-within { border-color: var(--primary); }
+.rate-multiplier-input.invalid { border-color: var(--danger); }
+.rate-multiplier-input.managed { background: #f4f7fb; }
+
+.rate-multiplier-input input {
+  width: 43px;
+  min-width: 0;
+  padding: 0 0 0 5px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #3f4d58;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rate-multiplier-input > span { font-size: 11px; }
+.rate-multiplier-input .priority-save { width: 17px; flex-basis: 17px; }
+
+.rate-sync-actions { display: flex; align-items: center; gap: 3px; }
+
+.rate-auto-toggle,
+.rate-sync-button {
+  display: grid;
+  height: 18px;
+  place-items: center;
+  padding: 0 4px;
+  border: 1px solid #d8e0e6;
+  border-radius: 4px;
+  background: #f8fafb;
+  color: #6f7d88;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.rate-auto-toggle.on { border-color: #adc7f1; background: var(--primary-soft); color: var(--primary); }
+.rate-sync-button { width: 20px; padding: 0; }
+.rate-auto-toggle:hover:not(:disabled), .rate-sync-button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.rate-auto-toggle:disabled, .rate-sync-button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 /* Active requests / local concurrency limit */
 .capacity-editor {
