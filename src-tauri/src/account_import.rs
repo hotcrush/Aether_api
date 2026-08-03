@@ -381,7 +381,13 @@ fn is_cpa_account(value: &Value) -> bool {
     let Some(object) = value.as_object() else {
         return false;
     };
-    string_field_eq(object.get("type"), "codex")
+    let declared_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    (declared_type.is_empty() || matches!(declared_type.as_str(), "codex" | "oauth"))
         && !object.contains_key("credentials")
         && !has_non_empty_string(object.get("api_key"), object.get("OPENAI_API_KEY"))
         && has_non_empty_string(object.get("access_token"), object.get("refresh_token"))
@@ -416,7 +422,12 @@ fn is_sub2api_backup(value: &Value) -> bool {
     let Some(object) = value.as_object() else {
         return false;
     };
-    if !string_field_eq(object.get("type"), "sub2api-data") {
+    let has_export_markers = object
+        .get("exported_at")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        && object.get("proxies").is_some_and(Value::is_array);
+    if !string_field_eq(object.get("type"), "sub2api-data") && !has_export_markers {
         return false;
     }
     let accounts = object
@@ -1116,6 +1127,65 @@ mod tests {
         assert_eq!(backup.accounts.len(), 2);
         assert_eq!(backup.accounts[1].account_type, "api_key");
         assert_eq!(backup.accounts[1].concurrency, Some(24));
+    }
+
+    #[test]
+    fn imports_markerless_backup_with_explicit_account_id() {
+        let parsed = parse_clipboard_import(
+            r#"{
+                "exported_at":"2026-08-03T03:22:27.708Z",
+                "proxies":[],
+                "accounts":[{
+                    "name":"person@example.com",
+                    "platform":"openai",
+                    "type":"oauth",
+                    "credentials":{
+                        "access_token":"access-test",
+                        "refresh_token":"refresh-test",
+                        "chatgpt_account_id":"account-imported",
+                        "chatgpt_user_id":"user-imported"
+                    }
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.source, ClipboardImportSource::Sub2api);
+        assert_eq!(parsed.accounts.len(), 1);
+        assert_eq!(parsed.accounts[0].chatgpt_account_id, "account-imported");
+        assert_eq!(parsed.accounts[0].chatgpt_user_id, "user-imported");
+    }
+
+    #[test]
+    fn converts_flat_oauth_json_to_sub2api_account() {
+        let parsed = parse_clipboard_import(
+            r#"{
+                "phone":"10000000000",
+                "email":"person@example.com",
+                "password":"must-not-store",
+                "chatgpt_account_id":"account-flat",
+                "plan_type":"free",
+                "access_token":"access-flat",
+                "refresh_token":"refresh-flat",
+                "id_token":"id-flat",
+                "expires_in":864000,
+                "auth_code":"must-not-store",
+                "state":"must-not-store"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.source, ClipboardImportSource::Cpa);
+        assert_eq!(parsed.accounts.len(), 1);
+        let account = &parsed.accounts[0];
+        assert_eq!(account.account_type, "oauth");
+        assert_eq!(account.name, "person@example.com");
+        assert_eq!(account.email, "person@example.com");
+        assert_eq!(account.chatgpt_account_id, "account-flat");
+        assert_eq!(account.plan_type, "free");
+        assert_eq!(account.access_token, "access-flat");
+        assert_eq!(account.refresh_token, "refresh-flat");
+        assert_eq!(account.id_token, "id-flat");
     }
 
     #[test]

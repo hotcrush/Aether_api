@@ -132,15 +132,16 @@ Aether 当前可解析：
 
 - Codex `auth.json` 风格 JSON。
 - CPA Codex JSON。
+- 顶层包含 `email`、`access_token`、`refresh_token`、`id_token`、`chatgpt_account_id` 等字段的扁平 OAuth JSON；转换时忽略手机号、密码、授权码和 state。
 - OpenAI OAuth `access_token` / `refresh_token` 数据。
 - OpenAI API Key 和 Base URL。
 - Sub2API 单账号 JSON。
-- Sub2API `sub2api-data` 备份。
+- Sub2API `sub2api-data` 备份，以及带 `exported_at`、`proxies`、`accounts` 标记但没有 `type` 的兼容备份。
 - 多行 Token 文本。
 
 导入窗口支持 JSON 文件、多文件拖放和粘贴文本；文件选择一次最多 20 个 JSON，粘贴文本作为一份内容处理，单份内容上限 10 MB。同一身份会更新凭据，不同 ChatGPT 用户、账号或不同 Base URL 的中转站会保留为独立条目。
 
-剪贴板和应用内网页下载采用更严格的自动识别规则：只在发现完整且受支持的 CPA/Sub2API JSON 后生成候选，前端只收到脱敏摘要，用户确认后才会导入。普通网页文本、零散 Token 或不完整 JSON 不会静默写入账号池。
+剪贴板和应用内网页下载采用更严格的自动识别规则：只在发现完整且受支持的 CPA、扁平 OAuth 或 Sub2API JSON 后生成候选，前端只收到脱敏摘要，用户确认后才会导入。普通网页文本、零散 Token 或不完整 JSON 不会静默写入账号池。
 
 ### 添加 OpenAI 账号（手动授权）
 

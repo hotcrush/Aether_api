@@ -38,6 +38,17 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] - 2026-08-03
+
+### Added
+
+- 新增扁平 OAuth JSON 转换导入，支持顶层 Token、ChatGPT Account ID、邮箱和套餐字段，并过滤手机号、密码、授权码与 state
+
+### Changed
+
+- 扩展 Sub2API 兼容备份识别，支持没有 `type` 但带 `exported_at`、`proxies` 和 `accounts` 标记的完整备份
+- 优化 GitHub Release 发布流程，自动使用当前标签对应的 CHANGELOG 章节作为发布正文
+
 ## [0.1.0-alpha.5] - 2026-08-03
 
 ### Added

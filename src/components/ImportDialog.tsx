@@ -119,6 +119,7 @@ export function ImportDialog({
           <strong>Sub2API</strong>
           <strong>Codex auth.json</strong>
           <strong>CPA</strong>
+          <strong>扁平 OAuth JSON</strong>
           <strong>Token / API Key</strong>
         </div>
         <label className="default-priority">
@@ -198,7 +199,7 @@ export function ImportDialog({
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder="粘贴 Codex auth.json、CPA/Sub2API JSON、OAuth Token 或 OpenAI API Key（Token 可每行一条）"
+          placeholder="粘贴 Codex auth.json、CPA/Sub2API JSON、扁平 OAuth JSON、OAuth Token 或 OpenAI API Key（Token 可每行一条）"
         />
       )}
 

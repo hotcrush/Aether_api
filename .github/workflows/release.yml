@@ -47,6 +47,27 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
+      - name: Read release notes from changelog
+        id: release-notes
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $escapedVersion = [Regex]::Escape($version)
+          $pattern = "(?ms)^## \[$escapedVersion\][^\r\n]*\r?\n(?<body>.*?)(?=^## \[|\z)"
+          $match = [Regex]::Match($changelog, $pattern)
+          if (-not $match.Success) {
+            throw "CHANGELOG.md 中缺少版本 $version"
+          }
+          $body = $match.Groups['body'].Value.Trim()
+          if ([string]::IsNullOrWhiteSpace($body)) {
+            throw "CHANGELOG.md 中的版本 $version 没有发布说明"
+          }
+          $delimiter = "AETHER_RELEASE_NOTES_$([Guid]::NewGuid().ToString('N'))"
+          "body<<$delimiter" >> $env:GITHUB_OUTPUT
+          $body >> $env:GITHUB_OUTPUT
+          $delimiter >> $env:GITHUB_OUTPUT
+
       - name: Build & Release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -56,7 +77,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Aether ${{ github.ref_name }}'
-          releaseBody: 'See CHANGELOG.md for details.'
+          releaseBody: ${{ steps.release-notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
