@@ -54,6 +54,7 @@ export function QuotaPanel({
 
   const windows = primaryWindows(state.quota)
   const estimate = quotaLimitEstimate(state.quota)
+  const resetCredits = resetCreditSummary(state.quota)
   return (
     <div className="quota-cell">
       <div className="quota-cell-head">
@@ -82,6 +83,12 @@ export function QuotaPanel({
           <RefreshCw size={12} />
         </button>
       </div>
+      {resetCredits && (
+        <div className="quota-reset-credits" data-tooltip={resetCredits.tooltip}>
+          重置额度 {resetCredits.count} 次
+          {resetCredits.expiresAt && <span>· 最近到期 {resetCredits.expiresAt}</span>}
+        </div>
+      )}
       {windows.length ? (
         <div className="usage-windows">
           {windows.map((entry) => (
@@ -229,6 +236,26 @@ function quotaLimitEstimate(quota: AccountQuota) {
     amount,
     window,
     tooltip: `按当前 ${window} 周期内本机的 ${requestText}估算成本 $${sampleCost.toFixed(4)} ÷ 已用 ${usedPercent.toFixed(1)}% 推算；仅统计经过本应用的成功请求。`,
+  }
+}
+
+function resetCreditSummary(quota: AccountQuota) {
+  const resetCredits = quota.rate_limit_reset_credits
+  const count = finiteNumber(resetCredits?.available_count)
+  if (count === null) return null
+  const expirations = (resetCredits?.credits ?? [])
+    .map((credit) => credit.expires_at ? parseDate(credit.expires_at) : null)
+    .filter((date): date is Date => Boolean(date && date.getTime() > Date.now()))
+    .sort((left, right) => left.getTime() - right.getTime())
+  const effectiveCount = resetCredits?.credits
+    ? Math.min(Math.max(0, Math.trunc(count)), expirations.length)
+    : Math.max(0, Math.trunc(count))
+  return {
+    count: effectiveCount,
+    expiresAt: expirations[0] ? formatDateTime(expirations[0].getTime()) : null,
+    tooltip: expirations.length
+      ? expirations.map((date, index) => `第 ${index + 1} 次：${formatDateTime(date.getTime())}`).join('\n')
+      : '上游未返回有效的重置额度到期时间',
   }
 }
 

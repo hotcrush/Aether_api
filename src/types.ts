@@ -57,6 +57,12 @@ export interface OutboundProxySettings {
   url: string
 }
 
+export interface CodexClientSettings {
+  auto_sync_enabled: boolean
+  effective_version: string
+  synced_at: number | null
+}
+
 export interface OpenAIAuthorization {
   authUrl: string
   sessionId: string
@@ -237,6 +243,7 @@ export interface AccountQuota {
   fetched_at: number | string
   rate_limit_reset_credits?: {
     available_count?: number | null
+    credits?: { expires_at?: string | null }[] | null
   } | null
   estimated_limit_usd?: number | null
   estimated_limit_window?: '5h' | '7d' | string | null

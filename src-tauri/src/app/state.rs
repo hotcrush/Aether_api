@@ -15,6 +15,7 @@ pub struct AppState {
     pub client: Arc<ArcSwap<reqwest::Client>>,
     pub proxy_client: Arc<ArcSwap<reqwest::Client>>,
     pub outbound_proxy: Arc<ArcSwap<OutboundProxySettings>>,
+    pub codex_version: Arc<ArcSwap<String>>,
     pub proxy_port: u16,
     pub proxy_profile: &'static str,
     pub capacity: Arc<CapacityRegistry>,

@@ -6,7 +6,7 @@ use crate::capacity::CapacityRegistry;
 use crate::cost_guard;
 use crate::db::Db;
 use crate::market::MarketState;
-use crate::{outbound_proxy, proxy};
+use crate::{codex_identity, outbound_proxy, proxy};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -76,6 +76,9 @@ pub(crate) fn run() {
                 outbound_proxy::build_client(600, 15, &outbound_proxy_settings)
                     .expect("初始化本地中转 HTTP 客户端失败"),
             )));
+            let codex_version = Arc::new(arc_swap::ArcSwap::new(Arc::new(
+                codex_identity::load_version(&db),
+            )));
             let outbound_proxy =
                 Arc::new(arc_swap::ArcSwap::new(Arc::new(outbound_proxy_settings)));
             let legacy_market_dir = std::env::var_os("CODEX_RELAY_DATA_DIR")
@@ -100,6 +103,7 @@ pub(crate) fn run() {
             let proxy_capacity = Arc::clone(&capacity);
             let proxy_cost_guard = Arc::clone(&cost_guard);
             let proxy_client = Arc::clone(&proxy_http_client);
+            let proxy_codex_version = Arc::clone(&codex_version);
             let proxy_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 proxy::start_proxy_server(
@@ -110,11 +114,17 @@ pub(crate) fn run() {
                     proxy_capacity,
                     proxy_cost_guard,
                     proxy_client,
+                    proxy_codex_version,
                     proxy_app,
                 )
                 .await;
             });
             crate::billing_sync::start_rate_sync(Arc::clone(&db), Arc::clone(&client));
+            codex_identity::start_version_sync(
+                Arc::clone(&db),
+                Arc::clone(&client),
+                Arc::clone(&codex_version),
+            );
 
             app.manage(AppState {
                 db,
@@ -122,6 +132,7 @@ pub(crate) fn run() {
                 client,
                 proxy_client: proxy_http_client,
                 outbound_proxy,
+                codex_version,
                 proxy_port,
                 proxy_profile,
                 capacity,
@@ -210,6 +221,9 @@ pub(crate) fn run() {
             super::proxy_settings::update_cost_guard_settings,
             super::proxy_settings::get_outbound_proxy_settings,
             super::proxy_settings::update_outbound_proxy_settings,
+            super::proxy_settings::get_codex_client_settings,
+            super::proxy_settings::update_codex_client_settings,
+            super::proxy_settings::sync_codex_client_version,
             super::proxy_settings::get_proxy_info,
             super::clipboard::inspect_clipboard_import,
             super::clipboard::confirm_clipboard_import,

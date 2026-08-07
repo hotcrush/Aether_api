@@ -223,11 +223,21 @@ pub(super) async fn proxy_handler(
         };
 
         let mut refreshed_after_unauthorized = false;
+        let mut load_shed_retries = 0usize;
+        let codex_version = crate::codex_identity::current_version(&state.codex_version);
         loop {
             let client = state.client.load_full();
             let response = match tokio::time::timeout_at(
                 startup_deadline,
-                send_upstream(&client, &ready, &method, &uri, &headers, &body),
+                send_upstream(
+                    &client,
+                    &ready,
+                    &method,
+                    &uri,
+                    &headers,
+                    &body,
+                    &codex_version,
+                ),
             )
             .await
             {
@@ -379,6 +389,23 @@ pub(super) async fn proxy_handler(
             {
                 Ok(Ok(prepared)) => prepared,
                 Ok(Err(error)) => {
+                    if ready.account_type == "oauth" && error.is_transient_load_shed() {
+                        let message = format!("{}: {error}", ready.name);
+                        if load_shed_retries < MAX_SAME_ACCOUNT_LOAD_SHED_RETRIES {
+                            load_shed_retries += 1;
+                            let delay = Duration::from_millis(250 * load_shed_retries as u64);
+                            if tokio::time::Instant::now() + delay < startup_deadline {
+                                tokio::time::sleep(delay).await;
+                                continue;
+                            }
+                        }
+                        if let Some(log) = &attempt_log {
+                            pending_retry = Some((log.clone(), message.clone()));
+                        }
+                        state.unbind_route(route_key, &ready.id);
+                        last_error = message;
+                        break;
+                    }
                     let scope = error.cooldown_scope();
                     let error = format!("{}: {error}", ready.name);
                     if let Some(log) = &attempt_log {

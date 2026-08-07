@@ -46,7 +46,8 @@ pub(super) async fn ensure_account_ready(
         return Ok(current);
     }
     let client = state.client.load_full();
-    let refreshed = oauth::refresh_account(&client, &current).await?;
+    let codex_version = crate::codex_identity::current_version(&state.codex_version);
+    let refreshed = oauth::refresh_account(&client, &current, &codex_version).await?;
     state
         .db
         .update_oauth_tokens(&current.id, &refreshed)
@@ -68,10 +69,11 @@ pub(super) async fn send_upstream(
     uri: &Uri,
     inbound_headers: &HeaderMap,
     body: &[u8],
+    codex_version: &str,
 ) -> Result<reqwest::Response, SendUpstreamError> {
     let oauth_account = account.account_type == "oauth";
     let target = if oauth_account {
-        oauth_target_url(uri).map_err(SendUpstreamError::Request)?
+        oauth_target_url(uri, codex_version).map_err(SendUpstreamError::Request)?
     } else {
         api_key_target_url(account, uri).map_err(SendUpstreamError::Account)?
     };
@@ -120,10 +122,7 @@ pub(super) async fn send_upstream(
     }
 
     if oauth_account {
-        request = request
-            .header("User-Agent", CODEX_USER_AGENT)
-            .header("originator", "codex_cli_rs")
-            .header("version", CODEX_VERSION)
+        request = crate::codex_identity::apply_identity(request, codex_version)
             .header("OpenAI-Beta", "responses=experimental");
         if !account.chatgpt_account_id.is_empty() {
             request = request.header("chatgpt-account-id", &account.chatgpt_account_id);
@@ -162,7 +161,7 @@ pub(super) async fn send_upstream(
     })
 }
 
-pub(super) fn oauth_target_url(uri: &Uri) -> Result<String, String> {
+pub(super) fn oauth_target_url(uri: &Uri, codex_version: &str) -> Result<String, String> {
     let path = uri.path();
     let mut target = if is_models_path(path) {
         CHATGPT_CODEX_MODELS_URL.to_string()
@@ -173,12 +172,12 @@ pub(super) fn oauth_target_url(uri: &Uri) -> Result<String, String> {
     } else {
         return Err(format!("OAuth 账号不支持端点 {path}"));
     };
-    if let Some(query) = uri.query() {
+    if is_models_path(path) {
+        target.push_str("?client_version=");
+        target.push_str(codex_version);
+    } else if let Some(query) = uri.query() {
         target.push('?');
         target.push_str(query);
-    } else if is_models_path(path) {
-        target.push_str("?client_version=");
-        target.push_str(CODEX_VERSION);
     }
     Ok(target)
 }

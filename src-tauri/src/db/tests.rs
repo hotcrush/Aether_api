@@ -371,6 +371,20 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
     )
     .unwrap();
 
+    let slow_total = db
+        .insert_request_log(&log_start(&account, "request-slow-total", 0))
+        .unwrap();
+    db.complete_request_log(
+        slow_total,
+        "success",
+        Some(200),
+        Some(1_000),
+        26_000,
+        RequestLogUsage::default(),
+        "",
+    )
+    .unwrap();
+
     let retry = db
         .insert_request_log(&log_start(&account, "request-3", 1))
         .unwrap();
@@ -386,14 +400,14 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
     .unwrap();
 
     let page = db.list_request_logs(RequestLogQuery::default()).unwrap();
-    assert_eq!(page.items.len(), 3);
+    assert_eq!(page.items.len(), 4);
     assert_eq!(page.items[0].path, "/v1/responses");
     assert!(!page.items[2].message.contains("secret-token"));
 
     let overview = db.request_log_overview().unwrap();
-    assert_eq!(overview.total_requests, 3);
-    assert_eq!(overview.total_attempts, 3);
-    assert_eq!(overview.success_attempts, 2);
+    assert_eq!(overview.total_requests, 4);
+    assert_eq!(overview.total_attempts, 4);
+    assert_eq!(overview.success_attempts, 3);
     assert_eq!(overview.retry_attempts, 1);
 
     let first_page = db
@@ -410,21 +424,22 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
             ..RequestLogQuery::default()
         })
         .unwrap();
-    assert_eq!(second_page.items.len(), 1);
+    assert_eq!(second_page.items.len(), 2);
     assert!(!second_page.has_more);
 
     let snapshot = db.channel_monitor_snapshot().unwrap();
     assert_eq!(snapshot.len(), 1);
     let item = &snapshot[0];
-    assert_eq!(item.available_24h, 2);
+    assert_eq!(item.available_24h, 3);
     assert_eq!(item.failed_24h, 1);
-    assert_eq!(item.attempts_24h, 3);
-    assert!((item.availability_24h.unwrap() - 200.0 / 3.0).abs() < 1e-9);
-    assert_eq!(item.timeline.len(), 3);
+    assert_eq!(item.attempts_24h, 4);
+    assert!((item.availability_24h.unwrap() - 75.0).abs() < 1e-9);
+    assert_eq!(item.timeline.len(), 4);
     assert_eq!(item.timeline[0].status, "error");
     assert_eq!(item.timeline[1].status, "degraded");
-    assert_eq!(item.timeline[2].source, "traffic");
-    assert_eq!(db.clear_request_logs().unwrap(), 3);
+    assert_eq!(item.timeline[2].status, "degraded");
+    assert_eq!(item.timeline[3].source, "traffic");
+    assert_eq!(db.clear_request_logs().unwrap(), 4);
 }
 
 #[test]

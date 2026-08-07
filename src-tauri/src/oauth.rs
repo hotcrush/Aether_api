@@ -111,6 +111,7 @@ impl OpenAIOAuthSessions {
         client: &reqwest::Client,
         session_id: &str,
         callback_or_code: &str,
+        codex_version: &str,
     ) -> Result<NewAccount, String> {
         let session = {
             let mut pending = self
@@ -132,7 +133,7 @@ impl OpenAIOAuthSessions {
 
         let response = client
             .post(OPENAI_TOKEN_URL)
-            .header("User-Agent", "codex-cli/0.144.1")
+            .header("User-Agent", format!("codex-cli/{codex_version}"))
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("client_id", OPENAI_CLIENT_ID),
@@ -189,6 +190,7 @@ impl OpenAIOAuthSessions {
         client: &reqwest::Client,
         code: &str,
         returned_state: &str,
+        codex_version: &str,
     ) -> Result<(String, NewAccount), String> {
         let returned_state = returned_state.trim();
         if returned_state.is_empty() {
@@ -205,7 +207,9 @@ impl OpenAIOAuthSessions {
                 .find_map(|(id, value)| (value.state == returned_state).then(|| id.clone()))
                 .ok_or_else(|| "授权已过期或不属于当前应用，请重新开始授权".to_string())?
         };
-        let account = self.complete(client, &session_id, code).await?;
+        let account = self
+            .complete(client, &session_id, code, codex_version)
+            .await?;
         Ok((session_id, account))
     }
 }
@@ -252,6 +256,7 @@ struct TokenResponse {
 pub async fn refresh_account(
     client: &reqwest::Client,
     account: &Account,
+    codex_version: &str,
 ) -> Result<NewAccount, String> {
     if account.account_type != "oauth" {
         return Err("该账号不是 OAuth 账号".to_string());
@@ -273,6 +278,7 @@ pub async fn refresh_account(
             priority: Some(account.priority),
             ..NewAccount::default()
         },
+        codex_version,
     )
     .await
 }
@@ -280,6 +286,7 @@ pub async fn refresh_account(
 pub async fn refresh_new_account(
     client: &reqwest::Client,
     account: &NewAccount,
+    codex_version: &str,
 ) -> Result<NewAccount, String> {
     if account.refresh_token.trim().is_empty() {
         return Err("账号没有 refresh_token，无法自动续期".to_string());
@@ -292,7 +299,7 @@ pub async fn refresh_new_account(
     };
     let response = client
         .post(OPENAI_TOKEN_URL)
-        .header("User-Agent", "codex-cli/0.144.1")
+        .header("User-Agent", format!("codex-cli/{codex_version}"))
         .form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", account.refresh_token.as_str()),

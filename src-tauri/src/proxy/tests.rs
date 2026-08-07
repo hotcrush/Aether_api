@@ -10,6 +10,9 @@ fn test_state() -> ProxyState {
         cost_guard: Arc::new(arc_swap::ArcSwap::new(Arc::new(
             CostGuardSettings::default(),
         ))),
+        codex_version: Arc::new(arc_swap::ArcSwap::new(Arc::new(
+            crate::codex_identity::DEFAULT_CODEX_VERSION.to_string(),
+        ))),
         app_handle: None,
         capacity: Arc::new(CapacityRegistry::default()),
         cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),
@@ -206,12 +209,21 @@ fn responses_subpaths_use_a_closed_safe_character_set() {
 #[test]
 fn upstream_url_builders_reject_unsafe_response_suffixes() {
     let uri: Uri = "/v1/responses/%2e%2e/admin".parse().unwrap();
-    assert!(oauth_target_url(&uri).is_err());
+    assert!(oauth_target_url(&uri, crate::codex_identity::DEFAULT_CODEX_VERSION).is_err());
 
     let mut relay = scheduling_account("relay", 1);
     relay.account_type = "api_key".to_string();
     relay.base_url = "https://relay.example/v1".to_string();
     assert!(api_key_target_url(&relay, &uri).is_err());
+}
+
+#[test]
+fn oauth_models_url_rebuilds_client_version_from_the_effective_identity() {
+    let uri: Uri = "/v1/models?client_version=0.100.0".parse().unwrap();
+    assert_eq!(
+        oauth_target_url(&uri, "0.147.0").unwrap(),
+        "https://chatgpt.com/backend-api/codex/models?client_version=0.147.0"
+    );
 }
 
 #[test]
@@ -604,6 +616,28 @@ fn failure_policy_matrix_is_explicit() {
             "status={status}, has_model={has_model}"
         );
     }
+}
+
+#[test]
+fn stream_load_shed_errors_keep_their_machine_code() {
+    let value = json!({
+        "type": "response.failed",
+        "response": {
+            "error": {
+                "code": "server_is_overloaded",
+                "message": "The server is overloaded"
+            }
+        }
+    });
+    let summary = stream_error_from_value(&value).unwrap();
+    assert!(summary.contains("server_is_overloaded"));
+    assert!(is_transient_load_shed_message(&summary));
+    assert!(is_transient_load_shed_message("slow_down: retry later"));
+    assert!(!is_transient_load_shed_message("quota exhausted"));
+    let sse = b"event: error\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"slow_down\",\"message\":\"retry\"}}}\n\n";
+    assert!(is_transient_load_shed_message(
+        &stream_payload_error(sse).unwrap()
+    ));
 }
 
 #[test]

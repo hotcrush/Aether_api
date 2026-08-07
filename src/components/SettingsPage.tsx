@@ -1,9 +1,18 @@
 import { useEffect, useState } from 'react'
-import { Settings, Monitor, Info, MessageSquarePlus, Network, ShieldCheck, Trash2 } from 'lucide-react'
+import { Settings, Monitor, Info, MessageSquarePlus, Network, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { open } from '@tauri-apps/plugin-shell'
-import { getAppVersion, getCostGuardSettings, getOutboundProxySettings, updateCostGuardSettings, updateOutboundProxySettings } from '../lib/commands'
-import type { AppVersion, CostGuardSettings, OutboundProxySettings } from '../types'
+import {
+  getAppVersion,
+  getCodexClientSettings,
+  getCostGuardSettings,
+  getOutboundProxySettings,
+  syncCodexClientVersion,
+  updateCodexClientSettings,
+  updateCostGuardSettings,
+  updateOutboundProxySettings,
+} from '../lib/commands'
+import type { AppVersion, CodexClientSettings, CostGuardSettings, OutboundProxySettings } from '../types'
 
 export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
   const [autostart, setAutostart] = useState<boolean | null>(null)
@@ -15,12 +24,16 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
   const [outboundProxy, setOutboundProxy] = useState<OutboundProxySettings | null>(null)
   const [outboundProxyBusy, setOutboundProxyBusy] = useState(false)
   const [outboundProxyError, setOutboundProxyError] = useState('')
+  const [codexClient, setCodexClient] = useState<CodexClientSettings | null>(null)
+  const [codexClientBusy, setCodexClientBusy] = useState(false)
+  const [codexClientError, setCodexClientError] = useState('')
 
   useEffect(() => {
     isEnabled().then(setAutostart).catch(() => setAutostart(false))
     getAppVersion().then(setAppVersion).catch(() => undefined)
     getCostGuardSettings().then(setCostGuard).catch(() => setCostGuardError('无法读取成本保护设置'))
     getOutboundProxySettings().then(setOutboundProxy).catch(() => setOutboundProxyError('无法读取出站代理设置'))
+    getCodexClientSettings().then(setCodexClient).catch(() => setCodexClientError('无法读取 Codex 客户端设置'))
   }, [])
 
   const toggleAutostart = async () => {
@@ -65,6 +78,32 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
       setOutboundProxyError(error instanceof Error ? error.message : '保存出站代理设置失败')
     } finally {
       setOutboundProxyBusy(false)
+    }
+  }
+
+  const toggleCodexVersionSync = async () => {
+    if (!codexClient || codexClientBusy) return
+    setCodexClientBusy(true)
+    setCodexClientError('')
+    try {
+      setCodexClient(await updateCodexClientSettings(!codexClient.auto_sync_enabled))
+    } catch (error) {
+      setCodexClientError(error instanceof Error ? error.message : '保存 Codex 客户端设置失败')
+    } finally {
+      setCodexClientBusy(false)
+    }
+  }
+
+  const syncCodexVersion = async () => {
+    if (codexClientBusy) return
+    setCodexClientBusy(true)
+    setCodexClientError('')
+    try {
+      setCodexClient(await syncCodexClientVersion())
+    } catch (error) {
+      setCodexClientError(error instanceof Error ? error.message : '同步 Codex 客户端版本失败')
+    } finally {
+      setCodexClientBusy(false)
     }
   }
 
@@ -170,6 +209,51 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
           )}
           <span className="settings-row-desc">实际准入上限 = 最高成本倍率 × (1 − 安全缓冲)。</span>
           {costGuardError && <span className="settings-error">{costGuardError}</span>}
+        </div>
+
+        <div className="settings-group">
+          <h3>Codex 出站身份</h3>
+          <div className="settings-row settings-row-top">
+            <div className="settings-row-info">
+              <RefreshCw size={16} />
+              <div>
+                <span className="settings-row-label">自动跟随官方稳定版</span>
+                <span className="settings-row-desc">每 6 小时同步一次，并统一 OAuth 转发、额度查询、账号检测和令牌刷新的客户端版本</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className={`settings-toggle${codexClient?.auto_sync_enabled ? ' on' : ''}`}
+              onClick={() => { void toggleCodexVersionSync() }}
+              disabled={codexClientBusy || !codexClient}
+              aria-label="切换 Codex 客户端版本自动同步"
+            >
+              <span className="settings-toggle-knob" />
+            </button>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-info">
+              <Info size={16} />
+              <div>
+                <span className="settings-row-label">当前生效版本 {codexClient ? `v${codexClient.effective_version}` : '读取中'}</span>
+                <span className="settings-row-desc">
+                  {codexClient?.synced_at
+                    ? `最近同步：${new Date(codexClient.synced_at * 1000).toLocaleString('zh-CN')}`
+                    : '尚未完成在线同步，当前使用内置稳定版本'}
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn settings-feedback-btn"
+              onClick={() => { void syncCodexVersion() }}
+              disabled={codexClientBusy}
+            >
+              <RefreshCw className={codexClientBusy ? 'spin' : undefined} size={14} />
+              立即同步
+            </button>
+          </div>
+          {codexClientError && <span className="settings-error">{codexClientError}</span>}
         </div>
 
         <div className="settings-group">

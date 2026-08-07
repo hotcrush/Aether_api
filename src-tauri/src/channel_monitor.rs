@@ -207,7 +207,12 @@ fn summarize(items: Vec<ChannelMonitorItem>) -> ChannelMonitorSnapshot {
         active_channels: active.len() as i64,
         abnormal_channels: active
             .iter()
-            .filter(|item| matches!(item.latest_status.as_deref(), Some("failed" | "error")))
+            .filter(|item| {
+                matches!(
+                    item.latest_status.as_deref(),
+                    Some("degraded" | "failed" | "error")
+                )
+            })
             .count() as i64,
         items,
     }

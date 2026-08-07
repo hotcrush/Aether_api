@@ -71,8 +71,37 @@ pub struct AdditionalRateLimit {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RateLimitResetCredit {
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RateLimitResetCredits {
     pub available_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credits: Option<Vec<RateLimitResetCredit>>,
+}
+
+impl RateLimitResetCredits {
+    fn normalize(&mut self, fetched_at: i64) {
+        let Some(credits) = self.credits.as_mut() else {
+            return;
+        };
+        credits.retain(|credit| {
+            credit.expires_at.as_deref().is_some_and(|expires_at| {
+                chrono::DateTime::parse_from_rfc3339(expires_at)
+                    .map(|value| value.timestamp() > fetched_at)
+                    .unwrap_or(true)
+            })
+        });
+        let remaining = i64::try_from(credits.len()).unwrap_or(i64::MAX);
+        self.available_count = Some(
+            self.available_count
+                .unwrap_or(remaining)
+                .clamp(0, remaining),
+        );
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -123,6 +152,9 @@ impl QuotaUsage {
                 rate_limit.normalize(self.fetched_at);
             }
         }
+        if let Some(reset_credits) = self.rate_limit_reset_credits.as_mut() {
+            reset_credits.normalize(self.fetched_at);
+        }
     }
 }
 
@@ -164,7 +196,11 @@ pub struct QuotaQueryResult {
     pub error: Option<String>,
 }
 
-pub async fn query_usage(client: &Client, account: &Account) -> Result<QuotaUsage, QueryError> {
+pub async fn query_usage(
+    client: &Client,
+    account: &Account,
+    codex_version: &str,
+) -> Result<QuotaUsage, QueryError> {
     if account.account_type != "oauth" {
         return Err(QueryError::new("只有 OpenAI OAuth 账号支持额度查询"));
     }
@@ -177,23 +213,19 @@ pub async fn query_usage(client: &Client, account: &Account) -> Result<QuotaUsag
         ));
     }
 
-    let response = client
+    let request = client
         .get(CHATGPT_USAGE_URL)
         .timeout(Duration::from_secs(20))
         .bearer_auth(&account.access_token)
         .header("chatgpt-account-id", &account.chatgpt_account_id)
         .header("openai-beta", "codex-1")
         .header("oai-language", "zh-CN")
-        .header("originator", "Codex Desktop")
         .header("accept", "application/json")
         .header("sec-fetch-site", "none")
         .header("sec-fetch-mode", "no-cors")
         .header("sec-fetch-dest", "empty")
-        .header("priority", "u=4, i")
-        .header(
-            "user-agent",
-            "codex_cli_rs/0.144.1 (Windows 11; x86_64) Windows_Terminal",
-        )
+        .header("priority", "u=4, i");
+    let response = crate::codex_identity::apply_identity(request, codex_version)
         .send()
         .await
         .map_err(|error| QueryError::new(format!("额度查询连接失败: {error}")))?;
@@ -371,6 +403,24 @@ mod tests {
         window.normalize(1_000);
         assert_eq!(window.remaining_percent, Some(62.5));
         assert_eq!(window.reset_at, Some(1_090));
+    }
+
+    #[test]
+    fn removes_expired_reset_credits_from_cached_usage() {
+        let mut credits = RateLimitResetCredits {
+            available_count: Some(3),
+            credits: Some(vec![
+                RateLimitResetCredit {
+                    expires_at: Some("2026-08-07T00:00:00Z".to_string()),
+                },
+                RateLimitResetCredit {
+                    expires_at: Some("2026-08-09T00:00:00Z".to_string()),
+                },
+            ]),
+        };
+        credits.normalize(1_786_147_200);
+        assert_eq!(credits.available_count, Some(1));
+        assert_eq!(credits.credits.as_ref().map(Vec::len), Some(1));
     }
 
     #[test]

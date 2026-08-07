@@ -18,6 +18,13 @@ impl StreamObserverContext {
         self.record_failure_with_policy(scope, message, true);
     }
 
+    pub(super) fn record_transient_failure(&self, message: &str) {
+        self.state.unbind_route(self.route_key, &self.account_id);
+        if let Some(log) = &self.request_log {
+            log.finish("error", Some(message));
+        }
+    }
+
     fn record_failure_with_policy(
         &self,
         scope: CooldownScope,
@@ -174,10 +181,13 @@ impl StreamBodyObserver {
         if !self.failure_recorded {
             if let Some(error) = stream_payload_error(event) {
                 self.failure_recorded = true;
-                self.context.record_failure(
-                    CooldownScope::Capability,
-                    &format!("upstream stream failed after commit: {error}"),
-                );
+                let message = format!("upstream stream failed after commit: {error}");
+                if is_transient_load_shed_message(&error) {
+                    self.context.record_transient_failure(&message);
+                } else {
+                    self.context
+                        .record_failure(CooldownScope::Capability, &message);
+                }
             }
         }
         if !self.usage_recorded {
@@ -492,13 +502,15 @@ pub(super) fn stream_payload_error(chunk: &[u8]) -> Option<String> {
             return Some(error);
         }
     }
+    let mut error_event = false;
     for line in text.lines() {
         if line
             .strip_prefix("event:")
             .map(str::trim)
             .is_some_and(|event| matches!(event, "error" | "response.failed"))
         {
-            return Some("upstream emitted an error event".to_string());
+            error_event = true;
+            continue;
         }
         let Some(data) = line.strip_prefix("data:").map(str::trim) else {
             continue;
@@ -510,7 +522,8 @@ pub(super) fn stream_payload_error(chunk: &[u8]) -> Option<String> {
             return Some(error);
         }
     }
-    None
+    (error_event && (text.contains("\n\n") || text.contains("\r\n\r\n")))
+        .then(|| "upstream emitted an error event".to_string())
 }
 
 pub(super) fn stream_error_from_value(value: &Value) -> Option<String> {
@@ -526,6 +539,9 @@ pub(super) fn stream_error_from_value(value: &Value) -> Option<String> {
     if !matches!(event_type, Some("error" | "response.failed")) && error.is_none() {
         return None;
     }
+    let code = error
+        .and_then(|error| error.get("code").and_then(Value::as_str))
+        .or_else(|| value.get("code").and_then(Value::as_str));
     let message = error
         .and_then(|error| {
             error
@@ -536,7 +552,16 @@ pub(super) fn stream_error_from_value(value: &Value) -> Option<String> {
         .or_else(|| value.get("message").and_then(Value::as_str))
         .or(event_type)
         .unwrap_or("upstream stream error");
-    Some(message.chars().take(300).collect())
+    let summary = match code.filter(|code| !message.contains(code)) {
+        Some(code) => format!("{code}: {message}"),
+        None => message.to_string(),
+    };
+    Some(summary.chars().take(300).collect())
+}
+
+pub(super) fn is_transient_load_shed_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("server_is_overloaded") || message.contains("slow_down")
 }
 
 pub(super) fn completed_response_from_sse(text: &str) -> Option<Value> {

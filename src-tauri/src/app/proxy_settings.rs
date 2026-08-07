@@ -2,7 +2,7 @@ use super::AppState;
 use crate::cost_guard::{self, CostGuardSettings};
 use crate::db::Db;
 use crate::outbound_proxy::{self, OutboundProxySettings};
-use crate::{codex_takeover, pricing};
+use crate::{codex_identity, codex_takeover, pricing};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
@@ -45,6 +45,39 @@ pub(crate) fn update_outbound_proxy_settings(
     state.proxy_client.store(Arc::new(proxy_client));
     state.outbound_proxy.store(Arc::new(settings.clone()));
     Ok(settings)
+}
+
+#[tauri::command]
+pub(crate) fn get_codex_client_settings(
+    state: tauri::State<AppState>,
+) -> codex_identity::CodexClientSettings {
+    codex_identity::settings(&state.db, &state.codex_version)
+}
+
+#[tauri::command]
+pub(crate) async fn update_codex_client_settings(
+    state: tauri::State<'_, AppState>,
+    settings: codex_identity::CodexClientSettingsUpdate,
+) -> Result<codex_identity::CodexClientSettings, String> {
+    codex_identity::set_auto_sync(&state.db, settings.auto_sync_enabled)?;
+    if settings.auto_sync_enabled {
+        let client = state.client.load_full();
+        if let Err(error) =
+            codex_identity::sync_latest_version(&state.db, &client, &state.codex_version, false)
+                .await
+        {
+            warn!(%error, "开启后立即同步 Codex 客户端版本失败");
+        }
+    }
+    Ok(codex_identity::settings(&state.db, &state.codex_version))
+}
+
+#[tauri::command]
+pub(crate) async fn sync_codex_client_version(
+    state: tauri::State<'_, AppState>,
+) -> Result<codex_identity::CodexClientSettings, String> {
+    let client = state.client.load_full();
+    codex_identity::sync_latest_version(&state.db, &client, &state.codex_version, true).await
 }
 
 #[tauri::command]

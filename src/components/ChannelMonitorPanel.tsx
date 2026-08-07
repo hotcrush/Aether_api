@@ -81,8 +81,8 @@ export function ChannelMonitorPanel({
         item.timeline[0]?.endpoint_family,
       ].some((value) => value?.toLowerCase().includes(normalizedQuery))) return false
       const status = displayStatus(item)
-      if (filter === 'healthy') return status === 'operational' || status === 'degraded'
-      if (filter === 'abnormal') return status === 'failed' || status === 'error'
+      if (filter === 'healthy') return status === 'operational'
+      if (filter === 'abnormal') return status === 'degraded' || status === 'failed' || status === 'error'
       if (filter === 'unknown') return status === null
       return true
     })
@@ -555,8 +555,8 @@ function MonitorDetailDialog({ item, onClose }: { item: ChannelMonitorItem | nul
                 <span>{event.message || `${event.source === 'probe' ? '手动检测' : '真实流量'}完成`}</span>
               </div>
               <div className="monitor-detail-values">
-                <strong>{formatLatency(event.ttfb_ms)}</strong>
-                <span>{event.http_status ? `HTTP ${event.http_status}` : formatTime(event.created_at)}</span>
+                <strong>首包 {formatLatency(event.ttfb_ms)}</strong>
+                <span>总计 {formatLatency(event.duration_ms)}{event.http_status ? ` · HTTP ${event.http_status}` : ''}</span>
               </div>
             </div>
           ))}

@@ -146,7 +146,7 @@ function previewSnapshot(): ChannelMonitorSnapshot {
     availability_24h: total24h ? (total24h - failed24h) / total24h * 100 : null,
     avg_ttfb_24h_ms: 1168,
     active_channels: active.length,
-    abnormal_channels: active.filter((item) => item.latest_status === 'failed' || item.latest_status === 'error').length,
+    abnormal_channels: active.filter((item) => item.latest_status !== 'operational').length,
     items,
   }
 }

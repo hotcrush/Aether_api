@@ -92,6 +92,21 @@
   font-weight: 560;
 }
 
+.quota-reset-credits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  color: #8b641d;
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.quota-reset-credits span {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .quota-query,
 .quota-refresh {
   display: flex;

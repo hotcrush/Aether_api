@@ -11,6 +11,7 @@ const REQUEST_LOG_MAX_ROWS: i64 = 20_000;
 const REQUEST_LOG_DEFAULT_LIMIT: i64 = 100;
 const REQUEST_LOG_MAX_LIMIT: i64 = 500;
 const SLOW_TTFB_MS: i64 = 6_000;
+const SLOW_DURATION_MS: i64 = 20_000;
 const REDACTED_CREDENTIAL_MESSAGE: &str = "上游错误包含敏感凭据，内容已脱敏";
 const REDACTED_TOKEN_MESSAGE: &str = "上游错误包含认证令牌，内容已脱敏";
 
@@ -568,6 +569,7 @@ impl Db {
         let rows = timeline_statement.query_map([], |row| {
             let raw_status: String = row.get(4)?;
             let ttfb_ms = row.get(6)?;
+            let duration_ms = row.get(7)?;
             let source: String = row.get(10)?;
             Ok((
                 row.get::<_, String>(1)?,
@@ -576,10 +578,10 @@ impl Db {
                     id: row.get(0)?,
                     request_id: row.get(2)?,
                     attempt_index: row.get(3)?,
-                    status: monitor_status(&raw_status, ttfb_ms).to_string(),
+                    status: monitor_status(&raw_status, ttfb_ms, duration_ms).to_string(),
                     http_status: row.get(5)?,
                     ttfb_ms,
-                    duration_ms: row.get(7)?,
+                    duration_ms,
                     endpoint_family: row.get(8)?,
                     model: row.get(9)?,
                     source: monitor_source(&source).to_string(),
@@ -653,9 +655,12 @@ fn normalize_status(status: &str) -> &'static str {
     }
 }
 
-fn monitor_status(status: &str, ttfb_ms: Option<i64>) -> &'static str {
+fn monitor_status(status: &str, ttfb_ms: Option<i64>, duration_ms: Option<i64>) -> &'static str {
     match status {
-        "success" | "operational" if ttfb_ms.is_some_and(|value| value >= SLOW_TTFB_MS) => {
+        "success" | "operational"
+            if ttfb_ms.is_some_and(|value| value >= SLOW_TTFB_MS)
+                || duration_ms.is_some_and(|value| value >= SLOW_DURATION_MS) =>
+        {
             "degraded"
         }
         "success" | "operational" => "operational",

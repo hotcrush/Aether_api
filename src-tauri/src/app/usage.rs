@@ -24,7 +24,8 @@ async fn account_for_quota(
             .unwrap_or(false);
     if needs_refresh && !account.refresh_token.is_empty() {
         let client = state.client.load_full();
-        let refreshed = oauth::refresh_account(&client, &account).await?;
+        let codex_version = crate::codex_identity::current_version(&state.codex_version);
+        let refreshed = oauth::refresh_account(&client, &account, &codex_version).await?;
         account = state
             .db
             .update_oauth_tokens(id, &refreshed)
@@ -47,15 +48,16 @@ async fn query_quota_for_id(
 ) -> Result<quota::QuotaUsage, String> {
     let account = account_for_quota(state, id).await?;
     let client = state.client.load_full();
-    let mut usage = match quota::query_usage(&client, &account).await {
+    let codex_version = crate::codex_identity::current_version(&state.codex_version);
+    let mut usage = match quota::query_usage(&client, &account, &codex_version).await {
         Ok(usage) => usage,
         Err(error) if error.status == Some(401) && !account.refresh_token.is_empty() => {
-            let refreshed = oauth::refresh_account(&client, &account).await?;
+            let refreshed = oauth::refresh_account(&client, &account, &codex_version).await?;
             let refreshed = state
                 .db
                 .update_oauth_tokens(id, &refreshed)
                 .map_err(|db_error| format!("保存刷新结果失败: {db_error}"))?;
-            quota::query_usage(&client, &refreshed)
+            quota::query_usage(&client, &refreshed, &codex_version)
                 .await
                 .map_err(|retry_error| retry_error.to_string())?
         }

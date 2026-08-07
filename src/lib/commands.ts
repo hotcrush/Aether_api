@@ -10,6 +10,7 @@ import type {
   CodexSessionHistoryRestoreResult,
   CodexSessionHistoryStatus,
   CodexTakeoverStatus,
+  CodexClientSettings,
   ClipboardImportCandidate,
   CostGuardSettings,
   ImportResult,
@@ -357,7 +358,15 @@ function previewQuota(accountId: string): AccountQuota {
     estimated_sample_cost_usd: accountId === 'oauth-pro' ? 51.84 : 49.73,
     estimated_sample_requests: accountId === 'oauth-pro' ? 527 : 213,
     estimated_sample_used_percent: accountId === 'oauth-pro' ? 37.4 : 81,
-    rate_limit_reset_credits: { available_count: accountId === 'oauth-pro' ? 2 : undefined },
+    rate_limit_reset_credits: accountId === 'oauth-pro'
+      ? {
+          available_count: 2,
+          credits: [
+            { expires_at: new Date(Date.now() + 5 * 86_400_000).toISOString() },
+            { expires_at: new Date(Date.now() + 12 * 86_400_000).toISOString() },
+          ],
+        }
+      : { available_count: 0, credits: [] },
     rate_limit: {
       allowed: true,
       limit_reached: false,
@@ -548,6 +557,20 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     case 'update_outbound_proxy_settings':
       window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}outbound-proxy`, JSON.stringify(args?.settings))
       return args?.settings as T
+    case 'get_codex_client_settings':
+      return JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}codex-client`) ?? '{"auto_sync_enabled":true,"effective_version":"0.147.0","synced_at":1786032000}') as T
+    case 'update_codex_client_settings': {
+      const current = JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}codex-client`) ?? '{"auto_sync_enabled":true,"effective_version":"0.147.0","synced_at":1786032000}') as CodexClientSettings
+      const next = { ...current, auto_sync_enabled: Boolean((args?.settings as { auto_sync_enabled?: boolean })?.auto_sync_enabled) }
+      window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}codex-client`, JSON.stringify(next))
+      return next as T
+    }
+    case 'sync_codex_client_version': {
+      const current = JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}codex-client`) ?? '{"auto_sync_enabled":true,"effective_version":"0.147.0","synced_at":1786032000}') as CodexClientSettings
+      const next = { ...current, effective_version: '0.147.0', synced_at: Math.floor(Date.now() / 1000) }
+      window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}codex-client`, JSON.stringify(next))
+      return next as T
+    }
     case 'delete_account': {
       const previousLength = previewAccounts.length
       previewAccounts = previewAccounts.filter((account) => account.id !== args?.id)
@@ -664,7 +687,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return deleted as T
     }
     case 'get_app_version':
-      return { version: '0.1.0-alpha.7', commit: 'dev', build_time: '2026-08-03' } as T
+      return { version: '0.1.0-alpha.8', commit: 'dev', build_time: '2026-08-07' } as T
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }
@@ -731,6 +754,17 @@ export const getOutboundProxySettings = () => call<OutboundProxySettings>('get_o
 
 export const updateOutboundProxySettings = (settings: OutboundProxySettings) =>
   call<OutboundProxySettings>('update_outbound_proxy_settings', { settings })
+
+export const getCodexClientSettings = () =>
+  call<CodexClientSettings>('get_codex_client_settings')
+
+export const updateCodexClientSettings = (autoSyncEnabled: boolean) =>
+  call<CodexClientSettings>('update_codex_client_settings', {
+    settings: { auto_sync_enabled: autoSyncEnabled },
+  })
+
+export const syncCodexClientVersion = () =>
+  call<CodexClientSettings>('sync_codex_client_version')
 
 export const deleteAccount = (id: string) =>
   call<boolean>('delete_account', { id })

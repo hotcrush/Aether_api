@@ -312,9 +312,10 @@ async fn handle_openai_callback(
     };
     let app_state = server.app_handle.state::<AppState>();
     let client = app_state.client.load_full();
+    let codex_version = crate::codex_identity::current_version(&app_state.codex_version);
     match app_state
         .oauth_sessions
-        .complete_callback(&client, &code, &state_value)
+        .complete_callback(&client, &code, &state_value, &codex_version)
         .await
     {
         Ok((session_id, account)) => match app_state.db.upsert_account(&account) {
@@ -377,6 +378,7 @@ pub(super) async fn import_parsed_accounts(
     };
     let now = chrono::Utc::now().timestamp();
     let client = state.client.load_full();
+    let codex_version = crate::codex_identity::current_version(&state.codex_version);
 
     for (offset, mut account) in accounts.into_iter().enumerate() {
         if account.priority.is_none() {
@@ -403,7 +405,7 @@ pub(super) async fn import_parsed_accounts(
                     });
                     continue;
                 }
-                match oauth::refresh_new_account(&client, &account).await {
+                match oauth::refresh_new_account(&client, &account, &codex_version).await {
                     Ok(refreshed) => account = refreshed,
                     Err(message) => {
                         result.failed += 1;
@@ -453,7 +455,8 @@ pub(crate) async fn refresh_account(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "账号不存在".to_string())?;
     let client = state.client.load_full();
-    let refreshed = oauth::refresh_account(&client, &account).await;
+    let codex_version = crate::codex_identity::current_version(&state.codex_version);
+    let refreshed = oauth::refresh_account(&client, &account, &codex_version).await;
     match refreshed {
         Ok(credentials) => state
             .db
@@ -482,8 +485,9 @@ pub(crate) async fn refresh_all_accounts(
         ..ImportResult::default()
     };
     let client = state.client.load_full();
+    let codex_version = crate::codex_identity::current_version(&state.codex_version);
     for (index, account) in accounts.into_iter().enumerate() {
-        match oauth::refresh_account(&client, &account).await {
+        match oauth::refresh_account(&client, &account, &codex_version).await {
             Ok(credentials) => match state.db.update_oauth_tokens(&account.id, &credentials) {
                 Ok(_) => result.updated += 1,
                 Err(error) => {
@@ -520,10 +524,11 @@ pub(crate) async fn test_account(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "账号不存在".to_string())?;
 
+    let codex_version = crate::codex_identity::current_version(&state.codex_version);
     let url = if account.account_type == "oauth" {
         format!(
             "https://chatgpt.com/backend-api/codex/models?client_version={}",
-            "0.144.1"
+            codex_version
         )
     } else {
         let base = if account.base_url.trim().is_empty() {
@@ -551,7 +556,7 @@ pub(crate) async fn test_account(
                 .unwrap_or(false))
         && !account.refresh_token.is_empty()
     {
-        let refreshed = match oauth::refresh_account(&client, &account).await {
+        let refreshed = match oauth::refresh_account(&client, &account, &codex_version).await {
             Ok(refreshed) => refreshed,
             Err(message) => {
                 if let Some(log) = &probe_log {
@@ -581,13 +586,7 @@ pub(crate) async fn test_account(
         };
         let mut request = client.get(&url).bearer_auth(token);
         if account.account_type == "oauth" {
-            request = request
-                .header(
-                    "User-Agent",
-                    "codex_cli_rs/0.144.1 (Windows 11; x86_64) Windows_Terminal",
-                )
-                .header("originator", "codex_cli_rs")
-                .header("version", "0.144.1");
+            request = crate::codex_identity::apply_identity(request, &codex_version);
             if !account.chatgpt_account_id.is_empty() {
                 request = request.header("chatgpt-account-id", &account.chatgpt_account_id);
             }
@@ -612,7 +611,7 @@ pub(crate) async fn test_account(
             && !refreshed_after_unauthorized
         {
             refreshed_after_unauthorized = true;
-            let refreshed = match oauth::refresh_account(&client, &account).await {
+            let refreshed = match oauth::refresh_account(&client, &account, &codex_version).await {
                 Ok(refreshed) => refreshed,
                 Err(message) => {
                     if let Some(log) = &probe_log {

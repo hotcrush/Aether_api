@@ -45,8 +45,6 @@ use crate::quota;
 
 const CHATGPT_CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const CHATGPT_CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
-const CODEX_USER_AGENT: &str = "codex_cli_rs/0.144.1 (Windows 11; x86_64) Windows_Terminal";
-const CODEX_VERSION: &str = "0.144.1";
 const STICKY_ROUTE_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_STICKY_ROUTES: u64 = 4096;
 const WEIGHTED_SCHEDULE_TTL: Duration = Duration::from_secs(2 * 60 * 60);
@@ -64,6 +62,7 @@ const STREAM_QUARANTINE_DURATION: Duration = Duration::from_secs(20);
 const QUOTA_SNAPSHOT_THROTTLE: Duration = Duration::from_secs(5);
 /// Default per-account rate limit: requests per second.
 const DEFAULT_ACCOUNT_RPS: u32 = 10;
+const MAX_SAME_ACCOUNT_LOAD_SHED_RETRIES: usize = 2;
 
 type AccountRateLimiter = DefaultKeyedRateLimiter<String>;
 
@@ -241,6 +240,10 @@ impl PrepareResponseError {
             Self::Upstream(_) => CooldownScope::Capability,
         }
     }
+
+    fn is_transient_load_shed(&self) -> bool {
+        matches!(self, Self::Upstream(message) if is_transient_load_shed_message(message))
+    }
 }
 
 impl Display for PrepareResponseError {
@@ -268,6 +271,7 @@ pub struct ProxyState {
     pub client: Arc<arc_swap::ArcSwap<reqwest::Client>>,
     pub access_token: Arc<arc_swap::ArcSwap<String>>,
     pub cost_guard: Arc<arc_swap::ArcSwap<CostGuardSettings>>,
+    pub codex_version: Arc<arc_swap::ArcSwap<String>>,
     app_handle: Option<tauri::AppHandle>,
     capacity: Arc<CapacityRegistry>,
     cooldowns: Cache<CooldownKey, Instant>,
@@ -626,6 +630,7 @@ pub async fn start_proxy_server(
     capacity: Arc<CapacityRegistry>,
     cost_guard: Arc<arc_swap::ArcSwap<CostGuardSettings>>,
     client: Arc<arc_swap::ArcSwap<reqwest::Client>>,
+    codex_version: Arc<arc_swap::ArcSwap<String>>,
     app_handle: tauri::AppHandle,
 ) {
     let state = Arc::new(ProxyState {
@@ -633,6 +638,7 @@ pub async fn start_proxy_server(
         client,
         access_token,
         cost_guard,
+        codex_version,
         app_handle: Some(app_handle),
         capacity,
         cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),
