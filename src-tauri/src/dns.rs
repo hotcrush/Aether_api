@@ -105,7 +105,10 @@ pub fn build_client(
     if let Some(proxy_url) = proxy_url {
         let proxy =
             reqwest::Proxy::all(proxy_url).map_err(|error| format!("出站代理地址无效: {error}"))?;
-        builder = builder.proxy(proxy);
+        // Local mixed proxies can rotate their upstream node while an idle CONNECT tunnel is
+        // still pooled. Reusing that tunnel is a common source of stale 502 responses, so keep
+        // proxied requests on HTTP/1.1 and never reuse an idle proxy connection.
+        builder = builder.proxy(proxy).http1_only().pool_max_idle_per_host(0);
     }
     builder
         .build()
