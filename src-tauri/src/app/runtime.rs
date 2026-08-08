@@ -69,11 +69,11 @@ pub(crate) fn run() {
             let cost_guard = Arc::new(arc_swap::ArcSwap::new(Arc::new(cost_guard::load(&db))));
             let outbound_proxy_settings = outbound_proxy::load(&db);
             let client = Arc::new(arc_swap::ArcSwap::new(Arc::new(
-                outbound_proxy::build_client(120, 15, &outbound_proxy_settings)
+                outbound_proxy::build_client(120, 10, &outbound_proxy_settings)
                     .expect("初始化出站 HTTP 客户端失败"),
             )));
             let proxy_http_client = Arc::new(arc_swap::ArcSwap::new(Arc::new(
-                outbound_proxy::build_client(600, 15, &outbound_proxy_settings)
+                outbound_proxy::build_client(600, 10, &outbound_proxy_settings)
                     .expect("初始化本地中转 HTTP 客户端失败"),
             )));
             let codex_version = Arc::new(arc_swap::ArcSwap::new(Arc::new(

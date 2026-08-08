@@ -701,19 +701,41 @@ async fn stream_bootstrap_rejects_empty_and_error_before_first_payload() {
         .is_err());
 
     let first_payload = Bytes::from_static(b"data: {\"type\":\"response.created\"}\n\n");
-    let later_error = Bytes::from_static(b"event: error\n\n");
+    let later_error = Bytes::from_static(b"event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"slow_down\"}}\n\n");
     let mut committed = Box::pin(futures::stream::iter(vec![
         Ok::<_, &'static str>(Bytes::new()),
         Ok(first_payload.clone()),
         Ok(later_error.clone()),
     ]));
-    assert_eq!(
-        read_stream_bootstrap(committed.as_mut(), true)
-            .await
-            .unwrap(),
-        first_payload
+    let error = read_stream_bootstrap(committed.as_mut(), true)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("slow_down"));
+
+    let output = Bytes::from_static(
+        b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
     );
-    assert_eq!(committed.next().await.unwrap().unwrap(), later_error);
+    let mut ready = Box::pin(futures::stream::iter(vec![
+        Ok::<_, &'static str>(first_payload),
+        Ok(output.clone()),
+    ]));
+    let bootstrap = read_stream_bootstrap(ready.as_mut(), true).await.unwrap();
+    assert_eq!(bootstrap, Bytes::from_static(
+        b"data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
+    ));
+}
+
+#[test]
+fn capacity_shed_errors_are_rewritten_only_for_client_output() {
+    let event = b"event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"busy\"}}\n\n";
+    let rewritten = sanitize_capacity_shed_sse_event(event);
+    assert!(std::str::from_utf8(&rewritten)
+        .unwrap()
+        .contains("\"code\":\"server_error\""));
+    assert!(std::str::from_utf8(&rewritten).unwrap().contains("busy"));
+    assert!(!std::str::from_utf8(&rewritten)
+        .unwrap()
+        .contains("server_is_overloaded"));
 }
 
 #[test]

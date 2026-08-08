@@ -92,6 +92,12 @@ impl StreamObserverContext {
         }
     }
 
+    pub(super) fn record_upstream_model(&self, model: &str, terminal: bool) {
+        if let Some(log) = &self.request_log {
+            log.record_upstream_model(model, terminal);
+        }
+    }
+
     pub(super) fn record_success(&self) {
         if let Some(log) = &self.request_log {
             log.finish("success", None);
@@ -136,6 +142,9 @@ impl StreamBodyObserver {
         self.capture_tail.extend_from_slice(chunk);
         if self.observed_model.is_none() {
             self.observed_model = extract_string_field_from_fragment(&self.capture_tail, "model");
+            if let Some(model) = self.observed_model.as_deref() {
+                self.context.record_upstream_model(model, false);
+            }
         }
         if self.observed_service_tier.is_none() {
             self.observed_service_tier =
@@ -175,6 +184,17 @@ impl StreamBodyObserver {
     pub(super) fn observe_event(&mut self, event: &[u8]) {
         let terminal = stream_has_terminal_event(event);
         let cancelled = stream_has_cancelled_event(event);
+        if let Ok(text) = std::str::from_utf8(event) {
+            let model = if self.sse {
+                extract_response_model_from_sse(text)
+            } else {
+                extract_response_model_from_json_str(text)
+            };
+            if let Some(model) = model {
+                self.observed_model = Some(model.clone());
+                self.context.record_upstream_model(&model, terminal);
+            }
+        }
         if terminal {
             self.terminal_seen = true;
         }
@@ -271,6 +291,11 @@ pub(super) async fn to_client_response(
             )));
         }
         let usage = extract_usage_from_sse(&text);
+        if let Some(model) = extract_response_model_from_sse(&text) {
+            if let Some(context) = stream_observer.as_ref() {
+                context.record_upstream_model(&model, true);
+            }
+        }
         let completed = completed_response_from_sse(&text).ok_or_else(|| {
             PrepareResponseError::Upstream(
                 "upstream stream ended without a terminal response event".to_string(),
@@ -299,6 +324,14 @@ pub(super) async fn to_client_response(
         let usage = std::str::from_utf8(&bytes)
             .ok()
             .and_then(extract_usage_from_json_str);
+        if let Some(model) = std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(extract_response_model_from_json_str)
+        {
+            if let Some(context) = stream_observer.as_ref() {
+                context.record_upstream_model(&model, true);
+            }
+        }
         let mut builder = Response::builder().status(status);
         *builder.headers_mut().unwrap() = headers;
         let resp = builder.body(Body::from(bytes)).unwrap();
@@ -313,36 +346,55 @@ pub(super) async fn to_client_response(
         if let Some(observer) = observer.as_mut() {
             observer.observe_chunk(&first);
         }
-        let remaining = futures::stream::unfold(
-            (stream, observer),
-            |(mut stream, mut observer)| async move {
+        let mut sanitizer = ClientStreamSanitizer::new(sse);
+        let first = sanitizer.push(&first);
+        let client_stream = futures::stream::unfold(
+            (stream, observer, sanitizer, first, false),
+            |(mut stream, mut observer, mut sanitizer, mut pending, mut finished)| async move {
+                loop {
+                    if let Some(chunk) = pending.take() {
+                        return Some((
+                            Ok::<Bytes, std::io::Error>(chunk),
+                            (stream, observer, sanitizer, pending, finished),
+                        ));
+                    }
+                    if finished {
+                        return None;
+                    }
                 match stream.next().await {
                     Some(Ok(chunk)) => {
                         if let Some(observer) = observer.as_mut() {
                             observer.observe_chunk(&chunk);
                         }
-                        Some((Ok(chunk), (stream, observer)))
+                            pending = sanitizer.push(&chunk);
                     }
                     Some(Err(error)) => {
                         if let Some(observer) = observer.as_mut() {
                             observer.record_transport_failure(&error.to_string());
                         }
-                        Some((Err(std::io::Error::other(error)), (stream, observer)))
+                            return Some((
+                                Err(std::io::Error::other(error)),
+                                (stream, observer, sanitizer, pending, true),
+                            ));
                     }
                     None => {
                         if let Some(observer) = observer.as_mut() {
                             observer.record_eof();
                         }
-                        None
+                            finished = true;
+                            pending = sanitizer.finish();
+                        }
                     }
                 }
             },
         );
-        let first = futures::stream::once(async move { Ok::<Bytes, std::io::Error>(first) });
-        let stream = first.chain(remaining);
         let mut builder = Response::builder().status(status);
         *builder.headers_mut().unwrap() = headers;
-        return Ok((builder.body(Body::from_stream(stream)).unwrap(), None, true));
+        return Ok((
+            builder.body(Body::from_stream(client_stream)).unwrap(),
+            None,
+            true,
+        ));
     }
 
     let stream = response
@@ -417,10 +469,129 @@ pub(super) fn sse_has_payload(buffer: &[u8]) -> bool {
     };
     let inspected = &normalized[..last_delimiter];
     inspected.lines().any(|line| {
-        line.strip_prefix("data:")
-            .map(str::trim)
-            .is_some_and(|data| !data.is_empty() && data != "[DONE]")
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            return false;
+        };
+        if data.is_empty() {
+            return false;
+        }
+        if data == "[DONE]" {
+            return true;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            return true;
+        };
+        !matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("response.created" | "response.in_progress" | "error" | "response.failed")
+        )
     })
+}
+
+struct ClientStreamSanitizer {
+    sse: bool,
+    buffer: Vec<u8>,
+}
+
+impl ClientStreamSanitizer {
+    fn new(sse: bool) -> Self {
+        Self {
+            sse,
+            buffer: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) -> Option<Bytes> {
+        if !self.sse {
+            return (!chunk.is_empty()).then(|| Bytes::copy_from_slice(chunk));
+        }
+        self.buffer.extend_from_slice(chunk);
+        let mut output = Vec::new();
+        while let Some(event_end) = next_sse_event_end(&self.buffer) {
+            let event = self.buffer.drain(..event_end).collect::<Vec<_>>();
+            output.extend_from_slice(&sanitize_capacity_shed_sse_event(&event));
+        }
+        (!output.is_empty()).then(|| Bytes::from(output))
+    }
+
+    fn finish(&mut self) -> Option<Bytes> {
+        if self.buffer.is_empty() {
+            return None;
+        }
+        let remaining = std::mem::take(&mut self.buffer);
+        Some(Bytes::from(sanitize_capacity_shed_sse_event(&remaining)))
+    }
+}
+
+pub(super) fn sanitize_capacity_shed_sse_event(event: &[u8]) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(event) else {
+        return event.to_vec();
+    };
+    let mut changed = false;
+    let mut output = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (content, ending) = line
+            .strip_suffix("\r\n")
+            .map(|content| (content, "\r\n"))
+            .or_else(|| line.strip_suffix('\n').map(|content| (content, "\n")))
+            .unwrap_or((line, ""));
+        let Some(data) = content.strip_prefix("data:") else {
+            output.push_str(content);
+            output.push_str(ending);
+            continue;
+        };
+        let leading_space = data.starts_with(' ');
+        let trimmed = data.trim();
+        let Ok(mut value) = serde_json::from_str::<Value>(trimmed) else {
+            output.push_str(content);
+            output.push_str(ending);
+            continue;
+        };
+        if !rewrite_capacity_shed_error_code(&mut value) {
+            output.push_str(content);
+            output.push_str(ending);
+            continue;
+        }
+        changed = true;
+        output.push_str("data:");
+        if leading_space {
+            output.push(' ');
+        }
+        output.push_str(&value.to_string());
+        output.push_str(ending);
+    }
+    if changed {
+        output.into_bytes()
+    } else {
+        event.to_vec()
+    }
+}
+
+fn rewrite_capacity_shed_error_code(value: &mut Value) -> bool {
+    let response_changed = value
+        .pointer_mut("/response/error")
+        .is_some_and(rewrite_capacity_shed_error_object);
+    let error_changed = value
+        .pointer_mut("/error")
+        .is_some_and(rewrite_capacity_shed_error_object);
+    response_changed || error_changed
+}
+
+fn rewrite_capacity_shed_error_object(error: &mut Value) -> bool {
+    let Some(code) = error
+        .as_object_mut()
+        .and_then(|error| error.get_mut("code"))
+    else {
+        return false;
+    };
+    if !code
+        .as_str()
+        .is_some_and(|code| matches!(code, "server_is_overloaded" | "slow_down"))
+    {
+        return false;
+    }
+    *code = Value::String("server_error".to_string());
+    true
 }
 
 pub(super) fn next_sse_event_end(buffer: &[u8]) -> Option<usize> {

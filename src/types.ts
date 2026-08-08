@@ -122,6 +122,8 @@ export interface RequestLog {
   message: string
   created_at: string
   completed_at: string | null
+  upstream_response_model: string | null
+  model_mismatch: boolean | null
 }
 
 export interface RequestLogQuery {
@@ -129,6 +131,7 @@ export interface RequestLogQuery {
   account_id?: string
   source?: string
   search?: string
+  model_mismatch_only?: boolean
   before_id?: number
   limit?: number
 }

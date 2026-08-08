@@ -44,6 +44,8 @@ pub struct RequestLog {
     pub message: String,
     pub created_at: String,
     pub completed_at: Option<String>,
+    pub upstream_response_model: Option<String>,
+    pub model_mismatch: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -53,6 +55,7 @@ pub struct RequestLogQuery {
     pub account_id: Option<String>,
     pub source: Option<String>,
     pub search: Option<String>,
+    pub model_mismatch_only: bool,
     pub before_id: Option<i64>,
     pub limit: Option<i64>,
 }
@@ -198,7 +201,9 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
             estimated_cost REAL NOT NULL DEFAULT 0.0,
             message TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            completed_at TEXT
+            completed_at TEXT,
+            upstream_response_model TEXT,
+            model_mismatch INTEGER
          );
          CREATE INDEX IF NOT EXISTS idx_request_logs_created_at
             ON request_logs(created_at DESC);
@@ -209,7 +214,22 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
          CREATE INDEX IF NOT EXISTS idx_request_logs_account_created_at
             ON request_logs(account_id, created_at DESC);
          CREATE INDEX IF NOT EXISTS idx_request_logs_request
-            ON request_logs(request_id, attempt_index);
+            ON request_logs(request_id, attempt_index);",
+    )?;
+    for (name, definition) in [
+        ("upstream_response_model", "TEXT"),
+        ("model_mismatch", "INTEGER"),
+    ] {
+        if !request_log_column_exists(conn, name)? {
+            conn.execute(
+                &format!("ALTER TABLE request_logs ADD COLUMN {name} {definition}"),
+                [],
+            )?;
+        }
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_request_logs_model_mismatch
+            ON request_logs(model_mismatch, id DESC);
          UPDATE request_logs
             SET status = 'cancelled',
                 message = CASE WHEN message = '' THEN '应用上次退出前请求未完成' ELSE message END,
@@ -298,6 +318,8 @@ impl Db {
         ttfb_ms: Option<i64>,
         duration_ms: i64,
         usage: RequestLogUsage,
+        upstream_response_model: Option<&str>,
+        model_mismatch: Option<bool>,
         message: &str,
     ) -> SqlResult<()> {
         let status = normalize_status(status);
@@ -318,8 +340,10 @@ impl Db {
                 unpriced_tokens = ?11,
                 estimated_cost = ?12,
                 message = ?13,
-                completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-              WHERE id = ?14 AND status = 'pending'",
+                completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                upstream_response_model = COALESCE(?14, upstream_response_model),
+                model_mismatch = COALESCE(?15, model_mismatch)
+              WHERE id = ?16 AND status = 'pending'",
             params![
                 status,
                 http_status.map(|value| value.max(0)),
@@ -334,6 +358,8 @@ impl Db {
                 usage.unpriced_tokens.max(0),
                 finite_cost(usage.estimated_cost),
                 message,
+                upstream_response_model.map(|value| limited_text(value, 200)),
+                model_mismatch.map(i64::from),
                 id,
             ],
         )?;
@@ -360,6 +386,9 @@ impl Db {
             clauses.push("source = ?".to_string());
             values.push(SqlValue::Text(source));
         }
+        if query.model_mismatch_only {
+            clauses.push("model_mismatch = 1".to_string());
+        }
         if let Some(before_id) = query.before_id.filter(|id| *id > 0) {
             clauses.push("id < ?".to_string());
             values.push(SqlValue::Integer(before_id));
@@ -368,11 +397,11 @@ impl Db {
             let pattern = format!("%{}%", escape_like(&search));
             clauses.push(
                 "(request_id LIKE ? ESCAPE '\\' OR account_name LIKE ? ESCAPE '\\'
-                  OR model LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'
-                  OR message LIKE ? ESCAPE '\\')"
+                  OR model LIKE ? ESCAPE '\\' OR upstream_response_model LIKE ? ESCAPE '\\'
+                  OR path LIKE ? ESCAPE '\\' OR message LIKE ? ESCAPE '\\')"
                     .to_string(),
             );
-            for _ in 0..5 {
+            for _ in 0..6 {
                 values.push(SqlValue::Text(pattern.clone()));
             }
         }
@@ -388,7 +417,8 @@ impl Db {
                     source, method, path, endpoint_family, model, status, http_status,
                     streaming, ttfb_ms, duration_ms, input_tokens, output_tokens,
                     cached_tokens, cache_write_tokens, reasoning_tokens, total_tokens,
-                    unpriced_tokens, estimated_cost, message, created_at, completed_at
+                    unpriced_tokens, estimated_cost, message, created_at, completed_at,
+                    upstream_response_model, model_mismatch
                FROM request_logs{where_sql}
               ORDER BY id DESC LIMIT ?"
         );
@@ -643,7 +673,20 @@ fn request_log_from_row(row: &rusqlite::Row<'_>) -> SqlResult<RequestLog> {
         message: row.get(24)?,
         created_at: row.get(25)?,
         completed_at: row.get(26)?,
+        upstream_response_model: row.get(27)?,
+        model_mismatch: row.get::<_, Option<i64>>(28)?.map(|value| value != 0),
     })
+}
+
+fn request_log_column_exists(conn: &Connection, column: &str) -> SqlResult<bool> {
+    let mut statement = conn.prepare("PRAGMA table_info(request_logs)")?;
+    let names = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for name in names {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn normalize_status(status: &str) -> &'static str {

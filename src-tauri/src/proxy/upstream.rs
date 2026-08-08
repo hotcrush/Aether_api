@@ -80,6 +80,8 @@ pub(super) async fn send_upstream(
     let normalized_body = if oauth_account && is_responses_path(uri.path()) {
         normalize_oauth_body(body, is_compact_path(uri.path()))
             .map_err(SendUpstreamError::Request)?
+    } else if is_responses_path(uri.path()) {
+        sanitize_responses_tool_parameter_types(body).0
     } else if !oauth_account {
         include_chat_stream_usage(body, uri.path())
     } else {
@@ -225,6 +227,7 @@ pub(super) fn normalize_oauth_body(body: &[u8], compact: bool) -> Result<Vec<u8>
     let object = value
         .as_object_mut()
         .ok_or_else(|| "Responses 请求体必须是 JSON 对象".to_string())?;
+    sanitize_responses_tool_parameter_types_in_object(object);
     if compact {
         object.remove("store");
         object.remove("stream");
@@ -288,6 +291,78 @@ pub(super) fn normalize_oauth_body(body: &[u8], compact: bool) -> Result<Vec<u8>
         }
     }
     serde_json::to_vec(&value).map_err(|error| format!("序列化请求体失败: {error}"))
+}
+
+const RESPONSES_TOOL_SCHEMA_MAX_DEPTH: usize = 4;
+
+pub(super) fn sanitize_responses_tool_parameter_types(body: &[u8]) -> (Vec<u8>, bool) {
+    let Ok(mut value) = serde_json::from_slice::<Value>(body) else {
+        return (body.to_vec(), false);
+    };
+    let Some(object) = value.as_object_mut() else {
+        return (body.to_vec(), false);
+    };
+    if !sanitize_responses_tool_parameter_types_in_object(object) {
+        return (body.to_vec(), false);
+    }
+    match serde_json::to_vec(&value) {
+        Ok(body) => (body, true),
+        Err(_) => (body.to_vec(), false),
+    }
+}
+
+fn sanitize_responses_tool_parameter_types_in_object(
+    object: &mut serde_json::Map<String, Value>,
+) -> bool {
+    let mut changed = object
+        .get_mut("tools")
+        .is_some_and(|tools| sanitize_tool_array(tools, 0));
+    if let Some(Value::Array(input)) = object.get_mut("input") {
+        for item in input {
+            if let Some(tools) = item.get_mut("tools") {
+                changed |= sanitize_tool_array(tools, 0);
+            }
+        }
+    }
+    changed
+}
+
+fn sanitize_tool_array(tools: &mut Value, depth: usize) -> bool {
+    if depth > RESPONSES_TOOL_SCHEMA_MAX_DEPTH {
+        return false;
+    }
+    let Some(tools) = tools.as_array_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for tool in tools {
+        let Some(tool) = tool.as_object_mut() else {
+            continue;
+        };
+        if let Some(Value::Object(parameters)) = tool.get_mut("parameters") {
+            changed |= replace_null_schema_type(parameters);
+        }
+        if let Some(Value::Object(function)) = tool.get_mut("function") {
+            if let Some(Value::Object(parameters)) = function.get_mut("parameters") {
+                changed |= replace_null_schema_type(parameters);
+            }
+        }
+        if let Some(nested) = tool.get_mut("tools") {
+            changed |= sanitize_tool_array(nested, depth + 1);
+        }
+    }
+    changed
+}
+
+fn replace_null_schema_type(parameters: &mut serde_json::Map<String, Value>) -> bool {
+    let Some(schema_type) = parameters.get_mut("type") else {
+        return false;
+    };
+    if !schema_type.is_null() {
+        return false;
+    }
+    *schema_type = Value::String("object".to_string());
+    true
 }
 
 pub(super) fn include_chat_stream_usage(body: &[u8], path: &str) -> Vec<u8> {

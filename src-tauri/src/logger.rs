@@ -4,12 +4,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracing::warn;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct RequestLogState {
     completed: bool,
     http_status: Option<i64>,
     ttfb_ms: Option<i64>,
     usage: RequestLogUsage,
+    upstream_response_model: Option<String>,
+    model_mismatch: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -17,6 +19,7 @@ struct RequestLogInner {
     db: Arc<Db>,
     id: i64,
     started_at: Instant,
+    requested_model: String,
     state: Mutex<RequestLogState>,
 }
 
@@ -33,6 +36,7 @@ impl RequestLogHandle {
                 db,
                 id,
                 started_at: Instant::now(),
+                requested_model: start.model.clone(),
                 state: Mutex::new(RequestLogState::default()),
             }),
         })
@@ -72,6 +76,31 @@ impl RequestLogHandle {
         }
     }
 
+    pub(crate) fn record_upstream_model(&self, model: &str, terminal: bool) {
+        let model = model.trim();
+        if model.is_empty() {
+            return;
+        }
+        let model = model.chars().take(200).collect::<String>();
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.completed || (!terminal && state.upstream_response_model.is_some()) {
+            return;
+        }
+        state.model_mismatch = Some(
+            self.inner.requested_model.trim().is_empty()
+                || !self
+                    .inner
+                    .requested_model
+                    .trim()
+                    .eq_ignore_ascii_case(&model),
+        );
+        state.upstream_response_model = Some(model);
+    }
+
     pub(crate) fn finish(&self, status: &str, message: Option<&str>) {
         let snapshot = {
             let mut state = self
@@ -83,7 +112,7 @@ impl RequestLogHandle {
                 return;
             }
             state.completed = true;
-            *state
+            state.clone()
         };
         if let Err(error) = self.inner.db.complete_request_log(
             self.inner.id,
@@ -92,6 +121,8 @@ impl RequestLogHandle {
             snapshot.ttfb_ms,
             elapsed_millis(self.inner.started_at),
             snapshot.usage,
+            snapshot.upstream_response_model.as_deref(),
+            snapshot.model_mismatch,
             message.unwrap_or_default(),
         ) {
             warn!(log_id = self.inner.id, %error, "完成请求日志失败");
@@ -133,7 +164,7 @@ impl Drop for RequestLogInner {
                 return;
             }
             state.completed = true;
-            *state
+            state.clone()
         };
         if let Err(error) = self.db.complete_request_log(
             self.id,
@@ -142,6 +173,8 @@ impl Drop for RequestLogInner {
             snapshot.ttfb_ms,
             elapsed_millis(self.started_at),
             snapshot.usage,
+            snapshot.upstream_response_model.as_deref(),
+            snapshot.model_mismatch,
             "请求在响应完成前中断",
         ) {
             warn!(log_id = self.id, %error, "取消请求日志失败");

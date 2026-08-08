@@ -575,7 +575,20 @@ export default function App() {
     let copyScanTimer: number | undefined
 
     void listenWebviewActivity((activity) => {
-      if (disposed || activity.kind !== 'copy' || activity.phase !== 'occurred') return
+      if (disposed) return
+      if (activity.kind === 'download') {
+        const fileName = activity.fileName || '文件'
+        if (activity.phase === 'requested') {
+          notify(`开始下载：${fileName}`)
+        } else if (activity.phase === 'finished') {
+          notify(
+            activity.success ? `下载完成：${fileName}` : `下载失败：${fileName}`,
+            activity.success === false,
+          )
+        }
+        return
+      }
+      if (activity.kind !== 'copy' || activity.phase !== 'occurred') return
       if (copyScanTimer !== undefined) window.clearTimeout(copyScanTimer)
       copyScanTimer = window.setTimeout(() => {
         copyScanTimer = undefined
@@ -620,7 +633,7 @@ export default function App() {
       stopImportCandidate?.()
       stopOpenRequested?.()
     }
-  }, [enqueueClipboardCandidate, scanClipboard])
+  }, [enqueueClipboardCandidate, notify, scanClipboard])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)

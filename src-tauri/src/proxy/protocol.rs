@@ -18,6 +18,65 @@ pub(super) fn extract_usage_from_json_str(text: &str) -> Option<UsageBreakdown> 
     extract_usage_from_value(&value)
 }
 
+pub(super) fn extract_response_model_from_json_str(text: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    extract_response_model_from_value(&value)
+}
+
+pub(super) fn extract_response_model_from_sse(text: &str) -> Option<String> {
+    let normalized = text.replace("\r\n", "\n");
+    let mut first = None;
+    let mut terminal = None;
+    for event in normalized.split("\n\n") {
+        let data = event
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&data) else {
+            continue;
+        };
+        let Some(model) = extract_response_model_from_value(&value) else {
+            continue;
+        };
+        let is_terminal = matches!(
+            value.get("type").and_then(Value::as_str),
+            Some(
+                "response.completed"
+                    | "response.done"
+                    | "response.failed"
+                    | "response.incomplete"
+                    | "response.cancelled"
+                    | "response.canceled"
+            )
+        );
+        if is_terminal {
+            terminal = Some(model);
+        } else if first.is_none() {
+            first = Some(model);
+        }
+    }
+    terminal.or(first)
+}
+
+pub(super) fn extract_response_model_from_value(value: &Value) -> Option<String> {
+    let response = value.get("response").unwrap_or(value);
+    response
+        .get("model")
+        .or_else(|| value.get("model"))
+        .or_else(|| response.get("modelVersion"))
+        .or_else(|| value.get("modelVersion"))
+        .or_else(|| value.pointer("/data/model"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(|model| model.chars().take(200).collect())
+}
+
 pub(super) fn extract_usage_from_sse(text: &str) -> Option<UsageBreakdown> {
     let normalized = text.replace("\r\n", "\n");
     let mut best = None;

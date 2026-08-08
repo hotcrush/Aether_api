@@ -1,4 +1,4 @@
-import { Eraser, RefreshCw, Search, ScrollText } from 'lucide-react'
+import { ArrowRight, BadgeAlert, Eraser, RefreshCw, Search, ScrollText } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clearRequestLogs, listRequestLogs } from '../lib/commands'
 import { errorText } from '../lib/format'
@@ -35,6 +35,7 @@ export function LoggerPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
+  const [modelMismatchOnly, setModelMismatchOnly] = useState(false)
   const [nextBeforeId, setNextBeforeId] = useState<number | null>(null)
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -77,8 +78,9 @@ export function LoggerPage() {
   const baseQuery = useMemo<RequestLogQuery>(() => ({
     status: statusFilter === 'all' ? undefined : statusFilter,
     search: search || undefined,
+    model_mismatch_only: modelMismatchOnly,
     limit: PAGE_SIZE,
-  }), [search, statusFilter])
+  }), [modelMismatchOnly, search, statusFilter])
 
   const loadFirstPage = useCallback(async (mode: LoadMode) => {
     if (mode === 'auto' && activeRequestRef.current !== null) return
@@ -280,22 +282,38 @@ export function LoggerPage() {
               aria-label="搜索请求日志"
             />
           </label>
-          <div className="logger-status-filters" role="group" aria-label="按日志状态筛选">
-            {STATUS_FILTERS.map((option) => (
-              <button
-                key={option.value}
-                className={statusFilter === option.value ? 'active' : ''}
-                type="button"
-                aria-pressed={statusFilter === option.value}
-                onClick={() => {
-                  disarmClear()
-                  setFeedback('')
-                  setStatusFilter(option.value)
-                }}
-              >
-                {option.label}
-              </button>
-            ))}
+          <div className="logger-filter-group">
+            <div className="logger-status-filters" role="group" aria-label="按日志状态筛选">
+              {STATUS_FILTERS.map((option) => (
+                <button
+                  key={option.value}
+                  className={statusFilter === option.value ? 'active' : ''}
+                  type="button"
+                  aria-pressed={statusFilter === option.value}
+                  onClick={() => {
+                    disarmClear()
+                    setFeedback('')
+                    setStatusFilter(option.value)
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <button
+              className={`btn logger-model-filter${modelMismatchOnly ? ' active' : ''}`}
+              type="button"
+              aria-pressed={modelMismatchOnly}
+              data-tooltip="仅显示上游响应模型与请求模型不一致的日志"
+              onClick={() => {
+                disarmClear()
+                setFeedback('')
+                setModelMismatchOnly((current) => !current)
+              }}
+            >
+              <BadgeAlert size={14} />
+              模型不一致
+            </button>
           </div>
         </div>
 
@@ -388,6 +406,17 @@ function LoggerRow({ item }: { item: RequestLog }) {
           <div className="logger-request-meta">
             <span>{endpointLabel(item.endpoint_family)}</span>
             {item.model && <span data-tooltip={item.model}>{item.model}</span>}
+            {item.upstream_response_model && (
+              <span
+                className={`logger-model-audit${item.model_mismatch ? ' mismatch' : ''}`}
+                data-tooltip={item.model_mismatch
+                  ? `请求模型 ${item.model || '未知'}，上游响应声明 ${item.upstream_response_model}`
+                  : `上游响应声明 ${item.upstream_response_model}`}
+              >
+                <ArrowRight size={11} aria-hidden="true" />
+                {item.upstream_response_model}
+              </span>
+            )}
             {item.streaming && <span>流式</span>}
             <span>尝试 #{Math.max(0, item.attempt_index)}</span>
             <span className="logger-request-id" data-tooltip={item.request_id}>{shortRequestId(item.request_id)}</span>

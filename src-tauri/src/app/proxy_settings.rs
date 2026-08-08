@@ -38,8 +38,8 @@ pub(crate) fn update_outbound_proxy_settings(
     settings: OutboundProxySettings,
 ) -> Result<OutboundProxySettings, String> {
     let settings = settings.validate()?;
-    let client = outbound_proxy::build_client(120, 15, &settings)?;
-    let proxy_client = outbound_proxy::build_client(600, 15, &settings)?;
+    let client = outbound_proxy::build_client(120, 10, &settings)?;
+    let proxy_client = outbound_proxy::build_client(600, 10, &settings)?;
     let settings = outbound_proxy::save(&state.db, settings)?;
     state.client.store(Arc::new(client));
     state.proxy_client.store(Arc::new(proxy_client));

@@ -71,13 +71,15 @@ pub(crate) fn current_version(version: &ArcSwap<String>) -> String {
 }
 
 pub(crate) fn user_agent(version: &str) -> String {
-    format!("codex_cli_rs/{version} (Windows 11; x86_64) Windows_Terminal")
+    format!(
+        "codex-tui/{version} (Windows 11; x86_64) WindowsTerminal (codex-tui; {version})"
+    )
 }
 
 pub(crate) fn apply_identity(request: RequestBuilder, version: &str) -> RequestBuilder {
     request
         .header("User-Agent", user_agent(version))
-        .header("originator", "codex_cli_rs")
+        .header("originator", "codex-tui")
         .header("version", version)
 }
 
@@ -259,5 +261,13 @@ mod tests {
         );
         assert!(normalize_version("rust-v0.147.0").is_none());
         assert_eq!(compare_versions("0.147.0", "0.146.2"), Ordering::Greater);
+    }
+
+    #[test]
+    fn builds_paired_codex_tui_identity() {
+        assert_eq!(
+            user_agent("0.147.0"),
+            "codex-tui/0.147.0 (Windows 11; x86_64) WindowsTerminal (codex-tui; 0.147.0)"
+        );
     }
 }

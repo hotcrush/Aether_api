@@ -53,8 +53,15 @@ pub fn estimate_cost(usage: &UsageBreakdown, model_hint: Option<&str>) -> CostEs
             + long_output_multiplier * usage.output_tokens as f64 * price.output);
 
     CostEstimate {
-        total_cost,
+        total_cost: quantize_cost(total_cost),
         unpriced_tokens: usage.total_tokens.saturating_sub(component_total),
         matched_model: Some(price.model),
     }
+}
+
+fn quantize_cost(cost: f64) -> f64 {
+    if !cost.is_finite() || cost <= 0.0 {
+        return 0.0;
+    }
+    (cost * 100_000_000.0).round() / 100_000_000.0
 }

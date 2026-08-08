@@ -25,6 +25,45 @@ struct ManagedWebview {
 }
 
 #[derive(Default)]
+struct DownloadTracker {
+    by_url: HashMap<String, Vec<PathBuf>>,
+    reserved: HashSet<PathBuf>,
+}
+
+impl DownloadTracker {
+    fn reserve(&mut self, url: &tauri::Url, directory: &Path, file_name: &str) -> PathBuf {
+        let path = unique_download_path(directory, file_name, &self.reserved);
+        self.reserved.insert(path.clone());
+        self.by_url
+            .entry(url.as_str().to_string())
+            .or_default()
+            .push(path.clone());
+        path
+    }
+
+    fn finish(&mut self, url: &tauri::Url, completed: Option<&Path>) -> Option<PathBuf> {
+        let url_key = url.as_str().to_string();
+        let (requested, remove_url) = match self.by_url.get_mut(&url_key) {
+            Some(paths) => {
+                let index = completed
+                    .and_then(|completed| paths.iter().position(|path| path == completed))
+                    .unwrap_or_default();
+                let requested = (!paths.is_empty()).then(|| paths.remove(index));
+                (requested, paths.is_empty())
+            }
+            None => (None, false),
+        };
+        if remove_url {
+            self.by_url.remove(&url_key);
+        }
+        if let Some(path) = requested.as_ref() {
+            self.reserved.remove(path);
+        }
+        completed.map(Path::to_path_buf).or(requested)
+    }
+}
+
+#[derive(Default)]
 pub(crate) struct WorkspaceWebviewState {
     by_tab_id: Mutex<HashMap<String, ManagedWebview>>,
 }
@@ -174,12 +213,84 @@ fn safe_file_name(path: Option<&Path>, url: &tauri::Url) -> Option<String> {
                 .and_then(|mut segments| segments.next_back())
                 .filter(|segment| !segment.is_empty())
         })?;
+    sanitize_download_file_name(candidate)
+}
+
+fn sanitize_download_file_name(candidate: &str) -> Option<String> {
     let sanitized: String = candidate
         .chars()
-        .filter(|character| !character.is_control() && !matches!(character, '/' | '\\'))
-        .take(255)
+        .filter(|character| {
+            !character.is_control()
+                && !matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+        })
+        .take(180)
         .collect();
-    (!sanitized.is_empty()).then_some(sanitized)
+    let sanitized = sanitized.trim().trim_end_matches(['.', ' ']);
+    if sanitized.is_empty() || matches!(sanitized, "." | "..") {
+        return None;
+    }
+    let stem = Path::new(sanitized)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || stem
+            .strip_prefix("COM")
+            .or_else(|| stem.strip_prefix("LPT"))
+            .is_some_and(|suffix| {
+                suffix.len() == 1 && suffix.as_bytes()[0].is_ascii_digit() && suffix != "0"
+            });
+    Some(if reserved {
+        format!("_{sanitized}")
+    } else {
+        sanitized.to_string()
+    })
+}
+
+fn workspace_download_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+    if let Ok(path) = app.path().download_dir() {
+        candidates.push(path);
+    }
+    if let Ok(path) = app.path().app_data_dir() {
+        candidates.push(path.join("downloads"));
+    }
+    for directory in candidates {
+        if directory.is_absolute() && std::fs::create_dir_all(&directory).is_ok() {
+            return Ok(directory);
+        }
+    }
+    Err("无法创建 WebView 下载目录".to_string())
+}
+
+fn unique_download_path(directory: &Path, file_name: &str, reserved: &HashSet<PathBuf>) -> PathBuf {
+    let initial = directory.join(file_name);
+    if !initial.exists() && !reserved.contains(&initial) {
+        return initial;
+    }
+    let file = Path::new(file_name);
+    let stem = file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("download");
+    let extension = file.extension().and_then(|extension| extension.to_str());
+    for index in 1..10_000 {
+        let candidate = match extension {
+            Some(extension) if !extension.is_empty() => {
+                directory.join(format!("{stem} ({index}).{extension}"))
+            }
+            _ => directory.join(format!("{stem} ({index})")),
+        };
+        if !candidate.exists() && !reserved.contains(&candidate) {
+            return candidate;
+        }
+    }
+    directory.join(format!("{stem}-{}", uuid::Uuid::new_v4().simple()))
 }
 
 fn activity(
@@ -423,7 +534,8 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
     let download_app = app.clone();
     let new_tab_app = app.clone();
     let new_tab_source_tab_id = request.tab_id.clone();
-    let requested_download_paths = Arc::new(Mutex::new(HashMap::<String, PathBuf>::new()));
+    let download_directory = workspace_download_dir(&app)?;
+    let download_tracker = Arc::new(Mutex::new(DownloadTracker::default()));
     let mut builder = WebviewBuilder::new(webview_label.clone(), WebviewUrl::External(url))
         .focused(false)
         .devtools(cfg!(debug_assertions))
@@ -437,12 +549,15 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
             let origin = webview_origin(&webview);
             match event {
                 DownloadEvent::Requested { url, destination } => {
-                    if !destination.as_os_str().is_empty() {
-                        requested_download_paths
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .insert(url.as_str().to_string(), destination.clone());
-                    }
+                    let file_name = safe_file_name(Some(destination.as_path()), &url)
+                        .unwrap_or_else(|| {
+                            format!("aether-download-{}.bin", Utc::now().timestamp_millis())
+                        });
+                    let path = download_tracker
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .reserve(&url, &download_directory, &file_name);
+                    *destination = path.clone();
                     emit_activity(
                         &webview,
                         activity(
@@ -450,17 +565,16 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
                             "download",
                             "requested",
                             origin,
-                            safe_file_name(Some(destination.as_path()), &url),
+                            safe_file_name(Some(path.as_path()), &url),
                             None,
                         ),
                     );
                 }
                 DownloadEvent::Finished { url, path, success } => {
-                    let requested_path = requested_download_paths
+                    let completed_path = download_tracker
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .remove(url.as_str());
-                    let completed_path = path.or(requested_path);
+                        .finish(&url, path.as_deref());
                     let file_name = safe_file_name(completed_path.as_deref(), &url);
                     emit_activity(
                         &webview,
@@ -676,4 +790,46 @@ pub(crate) fn navigate_workspace_webview<R: Runtime>(
     };
     webview.navigate(url).map_err(|error| error.to_string())?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitizes_windows_download_names() {
+        assert_eq!(
+            sanitize_download_file_name(" report?.json "),
+            Some("report.json".to_string())
+        );
+        assert_eq!(
+            sanitize_download_file_name("CON.txt"),
+            Some("_CON.txt".to_string())
+        );
+        assert_eq!(sanitize_download_file_name(".."), None);
+    }
+
+    #[test]
+    fn reserves_distinct_paths_for_concurrent_downloads() {
+        let directory = Path::new("__aether_download_test__");
+        let mut reserved = HashSet::new();
+        let first = unique_download_path(directory, "accounts.json", &reserved);
+        reserved.insert(first.clone());
+        let second = unique_download_path(directory, "accounts.json", &reserved);
+
+        assert_eq!(first, directory.join("accounts.json"));
+        assert_eq!(second, directory.join("accounts (1).json"));
+    }
+
+    #[test]
+    fn tracker_recovers_requested_path_when_platform_omits_completed_path() {
+        let url = "https://example.com/accounts.json".parse().unwrap();
+        let directory = Path::new("__aether_download_test__");
+        let mut tracker = DownloadTracker::default();
+        let requested = tracker.reserve(&url, directory, "accounts.json");
+
+        assert_eq!(tracker.finish(&url, None), Some(requested));
+        assert!(tracker.by_url.is_empty());
+        assert!(tracker.reserved.is_empty());
+    }
 }

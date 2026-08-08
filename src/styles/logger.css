@@ -154,6 +154,27 @@
   background: #e9edef;
 }
 
+.logger-filter-group {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.logger-model-filter {
+  min-height: 34px;
+  gap: 5px;
+  border-color: var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.logger-model-filter.active {
+  border-color: rgba(197, 61, 72, 0.55);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .logger-status-filters button {
   height: 26px;
   padding: 0 9px;
@@ -319,6 +340,22 @@
   color: var(--text-muted);
   font-size: 9px;
   white-space: nowrap;
+}
+
+.logger-model-audit {
+  display: inline-flex;
+  max-width: 180px;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logger-model-audit.mismatch {
+  color: var(--danger);
+  font-weight: 700;
 }
 
 .logger-request-meta span {
@@ -526,8 +563,13 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .logger-status-filters {
+  .logger-filter-group {
     width: 100%;
+  }
+
+  .logger-status-filters {
+    min-width: 0;
+    flex: 1;
     overflow-x: auto;
   }
 

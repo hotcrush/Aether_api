@@ -167,6 +167,8 @@ let previewRequestLogs: RequestLog[] = [
     message: '',
     created_at: previewLogTimestamp(8_000),
     completed_at: null,
+    upstream_response_model: 'gpt-5.6-sol',
+    model_mismatch: false,
   },
   {
     id: 7,
@@ -196,6 +198,8 @@ let previewRequestLogs: RequestLog[] = [
     message: '',
     created_at: previewLogTimestamp(48_000),
     completed_at: previewLogTimestamp(43_714),
+    upstream_response_model: 'gpt-5.4',
+    model_mismatch: true,
   },
   {
     id: 6,
@@ -225,6 +229,8 @@ let previewRequestLogs: RequestLog[] = [
     message: '上游限流，已切换下一个可用账号',
     created_at: previewLogTimestamp(49_000),
     completed_at: previewLogTimestamp(48_759),
+    upstream_response_model: null,
+    model_mismatch: null,
   },
   {
     id: 5,
@@ -254,6 +260,8 @@ let previewRequestLogs: RequestLog[] = [
     message: '',
     created_at: previewLogTimestamp(132_000),
     completed_at: previewLogTimestamp(131_814),
+    upstream_response_model: null,
+    model_mismatch: null,
   },
   {
     id: 4,
@@ -283,6 +291,8 @@ let previewRequestLogs: RequestLog[] = [
     message: '没有可用且匹配该模型的上游',
     created_at: previewLogTimestamp(196_000),
     completed_at: previewLogTimestamp(195_962),
+    upstream_response_model: null,
+    model_mismatch: null,
   },
   {
     id: 3,
@@ -312,6 +322,8 @@ let previewRequestLogs: RequestLog[] = [
     message: '客户端在流式响应完成前断开',
     created_at: previewLogTimestamp(310_000),
     completed_at: previewLogTimestamp(308_158),
+    upstream_response_model: 'gpt-5.4',
+    model_mismatch: false,
   },
 ]
 
@@ -666,11 +678,18 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         .filter((item) => !query.status || item.status === query.status)
         .filter((item) => !query.account_id || item.account_id === query.account_id)
         .filter((item) => !query.source || item.source === query.source)
+        .filter((item) => !query.model_mismatch_only || item.model_mismatch === true)
         .filter((item) => !query.before_id || item.id < query.before_id)
         .filter((item) => {
           if (!normalizedSearch) return true
-          return [item.request_id, item.account_name, item.model, item.path, item.message]
-            .some((value) => value.toLocaleLowerCase().includes(normalizedSearch))
+          return [
+            item.request_id,
+            item.account_name,
+            item.model,
+            item.upstream_response_model ?? '',
+            item.path,
+            item.message,
+          ].some((value) => value.toLocaleLowerCase().includes(normalizedSearch))
         })
         .sort((left, right) => right.id - left.id)
       const items = filtered.slice(0, limit)
@@ -687,7 +706,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return deleted as T
     }
     case 'get_app_version':
-      return { version: '0.1.0-alpha.8', commit: 'dev', build_time: '2026-08-07' } as T
+      return { version: '0.1.0-alpha.9', commit: 'dev', build_time: '2026-08-08' } as T
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }

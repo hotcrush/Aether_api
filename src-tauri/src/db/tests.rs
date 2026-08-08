@@ -353,6 +353,8 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
             estimated_cost: 0.001,
             ..RequestLogUsage::default()
         },
+        Some("gpt-5.1"),
+        Some(true),
         "Bearer secret-token\ncompleted",
     )
     .unwrap();
@@ -367,6 +369,8 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
         Some(6_000),
         6_500,
         RequestLogUsage::default(),
+        None,
+        None,
         "",
     )
     .unwrap();
@@ -381,6 +385,8 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
         Some(1_000),
         26_000,
         RequestLogUsage::default(),
+        None,
+        None,
         "",
     )
     .unwrap();
@@ -395,6 +401,8 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
         Some(300),
         400,
         RequestLogUsage::default(),
+        None,
+        None,
         "rate limited",
     )
     .unwrap();
@@ -402,7 +410,19 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
     let page = db.list_request_logs(RequestLogQuery::default()).unwrap();
     assert_eq!(page.items.len(), 4);
     assert_eq!(page.items[0].path, "/v1/responses");
+    let audited = page.items.iter().find(|item| item.id == success).unwrap();
+    assert_eq!(audited.upstream_response_model.as_deref(), Some("gpt-5.1"));
+    assert_eq!(audited.model_mismatch, Some(true));
     assert!(!page.items[2].message.contains("secret-token"));
+
+    let mismatch = db
+        .list_request_logs(RequestLogQuery {
+            model_mismatch_only: true,
+            ..RequestLogQuery::default()
+        })
+        .unwrap();
+    assert_eq!(mismatch.items.len(), 1);
+    assert_eq!(mismatch.items[0].id, success);
 
     let overview = db.request_log_overview().unwrap();
     assert_eq!(overview.total_requests, 4);

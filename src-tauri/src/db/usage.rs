@@ -61,11 +61,7 @@ impl Db {
             .min(input_tokens.saturating_sub(cached_tokens));
         let reasoning_tokens = usage.reasoning_tokens.max(0).min(output_tokens);
         let unpriced_tokens = unpriced_tokens.max(0).min(total_tokens);
-        let cost = if cost.is_finite() && cost > 0.0 {
-            cost
-        } else {
-            0.0
-        };
+        let cost = quantize_cost(cost);
         if total_tokens <= 0 && cost <= 0.0 {
             return Ok(());
         }
@@ -136,11 +132,7 @@ impl Db {
             .min(input_tokens.saturating_sub(cached_tokens));
         let reasoning_tokens = usage.reasoning_tokens.max(0).min(output_tokens);
         let unpriced_tokens = unpriced_tokens.max(0).min(total_tokens);
-        let cost = if cost.is_finite() && cost > 0.0 {
-            cost
-        } else {
-            0.0
-        };
+        let cost = quantize_cost(cost);
         if total_tokens <= 0 && cost <= 0.0 {
             return Ok(());
         }
@@ -315,6 +307,13 @@ impl Db {
             },
         )
     }
+}
+
+fn quantize_cost(cost: f64) -> f64 {
+    if !cost.is_finite() || cost <= 0.0 {
+        return 0.0;
+    }
+    (cost * 100_000_000.0).round() / 100_000_000.0
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
