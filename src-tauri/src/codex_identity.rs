@@ -71,9 +71,7 @@ pub(crate) fn current_version(version: &ArcSwap<String>) -> String {
 }
 
 pub(crate) fn user_agent(version: &str) -> String {
-    format!(
-        "codex-tui/{version} (Windows 11; x86_64) WindowsTerminal (codex-tui; {version})"
-    )
+    format!("codex-tui/{version} (Windows 11; x86_64) WindowsTerminal (codex-tui; {version})")
 }
 
 pub(crate) fn apply_identity(request: RequestBuilder, version: &str) -> RequestBuilder {

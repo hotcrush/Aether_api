@@ -2,6 +2,7 @@ mod protocol;
 mod request;
 mod streaming;
 mod upstream;
+mod websocket;
 
 #[cfg(test)]
 mod tests;
@@ -10,10 +11,14 @@ use protocol::*;
 use request::*;
 use streaming::*;
 use upstream::*;
+use websocket::*;
 
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Extension, State},
+    extract::{
+        ws::{rejection::WebSocketUpgradeRejection, WebSocketUpgrade},
+        DefaultBodyLimit, Extension, State,
+    },
     http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::any,

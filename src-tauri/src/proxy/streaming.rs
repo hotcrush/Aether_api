@@ -361,26 +361,26 @@ pub(super) async fn to_client_response(
                     if finished {
                         return None;
                     }
-                match stream.next().await {
-                    Some(Ok(chunk)) => {
-                        if let Some(observer) = observer.as_mut() {
-                            observer.observe_chunk(&chunk);
-                        }
+                    match stream.next().await {
+                        Some(Ok(chunk)) => {
+                            if let Some(observer) = observer.as_mut() {
+                                observer.observe_chunk(&chunk);
+                            }
                             pending = sanitizer.push(&chunk);
-                    }
-                    Some(Err(error)) => {
-                        if let Some(observer) = observer.as_mut() {
-                            observer.record_transport_failure(&error.to_string());
                         }
+                        Some(Err(error)) => {
+                            if let Some(observer) = observer.as_mut() {
+                                observer.record_transport_failure(&error.to_string());
+                            }
                             return Some((
                                 Err(std::io::Error::other(error)),
                                 (stream, observer, sanitizer, pending, true),
                             ));
-                    }
-                    None => {
-                        if let Some(observer) = observer.as_mut() {
-                            observer.record_eof();
                         }
+                        None => {
+                            if let Some(observer) = observer.as_mut() {
+                                observer.record_eof();
+                            }
                             finished = true;
                             pending = sanitizer.finish();
                         }

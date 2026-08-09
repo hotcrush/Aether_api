@@ -249,6 +249,7 @@ fn apply_takeover_config(
     provider.insert("name", value(AETHER_PROVIDER_NAME));
     provider.insert("base_url", value(normalize_url(proxy_base_url)));
     provider.insert("wire_api", value("responses"));
+    provider.insert("supports_websockets", value(true));
     provider.insert("requires_openai_auth", value(true));
     provider.insert("experimental_bearer_token", value(access_token.trim()));
 

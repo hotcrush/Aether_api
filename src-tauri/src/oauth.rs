@@ -133,7 +133,10 @@ impl OpenAIOAuthSessions {
 
         let response = client
             .post(OPENAI_TOKEN_URL)
-            .header("User-Agent", crate::codex_identity::user_agent(codex_version))
+            .header(
+                "User-Agent",
+                crate::codex_identity::user_agent(codex_version),
+            )
             .form(&[
                 ("grant_type", "authorization_code"),
                 ("client_id", OPENAI_CLIENT_ID),
@@ -299,7 +302,10 @@ pub async fn refresh_new_account(
     };
     let response = client
         .post(OPENAI_TOKEN_URL)
-        .header("User-Agent", crate::codex_identity::user_agent(codex_version))
+        .header(
+            "User-Agent",
+            crate::codex_identity::user_agent(codex_version),
+        )
         .form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", account.refresh_token.as_str()),

@@ -29,6 +29,7 @@ pub(super) async fn enforce_content_length_limit(
 
 pub(super) async fn proxy_handler(
     State(state): State<Arc<ProxyState>>,
+    websocket: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -43,6 +44,9 @@ pub(super) async fn proxy_handler(
     }
     if uri.path() == "/health" {
         return json_response(StatusCode::OK, json!({"status": "ok"}));
+    }
+    if let Ok(websocket) = websocket {
+        return websocket_upgrade_response(state, method, uri, headers, websocket).await;
     }
 
     let body = match body {
@@ -652,7 +656,7 @@ pub(super) fn classify_failure(status: StatusCode, has_model: bool) -> FailurePo
     }
 }
 
-fn persist_codex_quota_headers(
+pub(super) fn persist_codex_quota_headers(
     state: &Arc<ProxyState>,
     account: &Account,
     headers: &reqwest::header::HeaderMap,

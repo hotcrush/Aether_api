@@ -330,8 +330,9 @@ impl MarketState {
                         failed.failure_count += 1;
                         failed.error = Some(error.chars().take(180).collect());
                         let backoff = if has_usable_snapshot {
-                            (REFRESH_SECONDS * 2_i64.pow((failed.failure_count - 1).clamp(0, 5) as u32))
-                                .min(MAX_BACKOFF_SECONDS)
+                            (REFRESH_SECONDS
+                                * 2_i64.pow((failed.failure_count - 1).clamp(0, 5) as u32))
+                            .min(MAX_BACKOFF_SECONDS)
                         } else {
                             BOOTSTRAP_RECOVERY_SECONDS
                         };
@@ -374,8 +375,14 @@ impl MarketState {
         if !baseline {
             for product in &products {
                 // Only generate arrival events for focus categories (K12, GPT Plus, BUG TEAM)
-                let is_focus = product.category.as_deref().is_some_and(|c| c == "k12" || c == "gptplus" || c == "bugteam");
-                if !previous_by_id.contains_key(&product.id) && product.missing_count == 0 && is_focus {
+                let is_focus = product
+                    .category
+                    .as_deref()
+                    .is_some_and(|c| c == "k12" || c == "gptplus" || c == "bugteam");
+                if !previous_by_id.contains_key(&product.id)
+                    && product.missing_count == 0
+                    && is_focus
+                {
                     events.push(product_event(
                         "product.available",
                         product,
@@ -844,7 +851,11 @@ impl MarketState {
         }
     }
 
-    async fn checkpoint_protection(&self, protection: &Arc<tokio::sync::Mutex<MarketProtection>>, force: bool) {
+    async fn checkpoint_protection(
+        &self,
+        protection: &Arc<tokio::sync::Mutex<MarketProtection>>,
+        force: bool,
+    ) {
         let mut checkpoint = self.protection_checkpoint.lock().await;
         if !force && checkpoint.is_some_and(|previous| previous.elapsed() < Duration::from_secs(5))
         {

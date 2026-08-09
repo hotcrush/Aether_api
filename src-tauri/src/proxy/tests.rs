@@ -701,7 +701,9 @@ async fn stream_bootstrap_rejects_empty_and_error_before_first_payload() {
         .is_err());
 
     let first_payload = Bytes::from_static(b"data: {\"type\":\"response.created\"}\n\n");
-    let later_error = Bytes::from_static(b"event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"slow_down\"}}\n\n");
+    let later_error = Bytes::from_static(
+        b"event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"slow_down\"}}\n\n",
+    );
     let mut committed = Box::pin(futures::stream::iter(vec![
         Ok::<_, &'static str>(Bytes::new()),
         Ok(first_payload.clone()),
@@ -712,9 +714,8 @@ async fn stream_bootstrap_rejects_empty_and_error_before_first_payload() {
         .unwrap_err();
     assert!(error.to_string().contains("slow_down"));
 
-    let output = Bytes::from_static(
-        b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
-    );
+    let output =
+        Bytes::from_static(b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n");
     let mut ready = Box::pin(futures::stream::iter(vec![
         Ok::<_, &'static str>(first_payload),
         Ok(output.clone()),

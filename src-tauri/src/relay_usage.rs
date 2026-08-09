@@ -64,7 +64,8 @@ async fn query_usage_inner(
     // Probe it first, then fall back to the generic relay contract so existing
     // providers keep their current behavior.
     let new_api_url = endpoint_url(&base_url, "/api/usage/token/");
-    if let Ok((status, body)) = get_json(client, new_api_url, api_key, NEW_API_TOKEN_BODY_LIMIT).await
+    if let Ok((status, body)) =
+        get_json(client, new_api_url, api_key, NEW_API_TOKEN_BODY_LIMIT).await
     {
         if status.is_success() {
             if let Some(token_usage) = parse_new_api_token_usage(&body) {
@@ -200,7 +201,10 @@ struct NewApiLogSummary {
 fn parse_new_api_token_usage(body: &[u8]) -> Option<NewApiTokenUsage> {
     let root = serde_json::from_slice::<Value>(body).ok()?;
     let data = root.get("data")?.as_object()?;
-    let object = data.get("object").and_then(Value::as_str).unwrap_or_default();
+    let object = data
+        .get("object")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let data_value = data_value(data);
     let total_granted = number_at(&data_value, &[&["total_granted"]])?;
     let total_used = number_at(&data_value, &[&["total_used"]]).unwrap_or(0.0);
@@ -239,9 +243,11 @@ fn data_value(data: &serde_json::Map<String, Value>) -> Value {
 
 fn parse_quota_per_unit(body: &[u8]) -> Option<f64> {
     let root = serde_json::from_slice::<Value>(body).ok()?;
-    let payload = root.get("data").filter(|value| value.is_object()).unwrap_or(&root);
-    number_at(payload, &[&["quota_per_unit"], &["quotaPerUnit"]])
-        .filter(|value| *value > 0.0)
+    let payload = root
+        .get("data")
+        .filter(|value| value.is_object())
+        .unwrap_or(&root);
+    number_at(payload, &[&["quota_per_unit"], &["quotaPerUnit"]]).filter(|value| *value > 0.0)
 }
 
 fn parse_new_api_logs(body: &[u8]) -> NewApiLogSummary {
@@ -267,8 +273,8 @@ fn parse_new_api_logs(body: &[u8]) -> NewApiLogSummary {
         }
         summary.request_count = summary.request_count.saturating_add(1);
         let quota = number_at(item, &[&["quota"]]).unwrap_or(0.0);
-        let created_at = number_at(item, &[&["created_at"], &["createdAt"]])
-            .map(|value| value as i64);
+        let created_at =
+            number_at(item, &[&["created_at"], &["createdAt"]]).map(|value| value as i64);
         if let Some(created_at) = created_at {
             if created_at >= month_start {
                 month_total += quota;

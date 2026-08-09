@@ -1,6 +1,6 @@
 [package]
 name = "sub2api"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.11"
 edition = "2021"
 description = "Aether local OpenAI/Codex multi-upstream desktop gateway"
 homepage = "https://github.com/hotcrush/Aether_api"
@@ -23,7 +23,7 @@ serde_json = "1"
 base64 = "0.22"
 sha2 = "0.10"
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "gzip", "brotli", "deflate", "zstd", "socks"], default-features = false }
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 tokio-rusqlite = "0.7"
@@ -35,6 +35,8 @@ chrono = { version = "0.4", features = ["serde"] }
 tower-http = { version = "0.6", features = ["cors"] }
 bytes = "1"
 futures = "0.3"
+tokio-socks = "0.5"
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 hickory-resolver = "0.24"
 tracing = "0.1"
 tracing-subscriber = "0.3"

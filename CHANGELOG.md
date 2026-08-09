@@ -38,6 +38,18 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.11] - 2026-08-09
+
+### Added
+
+- 新增官方 Codex Responses WebSocket 代理，支持通过 SOCKS5/SOCKS5H 出站代理连接上游
+- 接管 Codex 时启用 Aether provider 的 WebSocket 能力
+
+### Fixed
+
+- 修复 Codex WebSocket 的账号路由、OAuth 令牌续期、响应事件转发和用量观察
+- 支持通过 WebSocket 转发 `response.cancel` 取消帧
+
 ## [0.1.0-alpha.10] - 2026-08-08
 
 ### Fixed
