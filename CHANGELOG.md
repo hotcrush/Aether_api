@@ -38,6 +38,17 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.12] - 2026-08-10
+
+### Changed
+
+- Codex 接管默认启用 Responses WebSocket，并在应用启动时自动升级已有 Aether 接管配置
+
+### Fixed
+
+- 修复 Codex WebSocket 拒绝默认 HTTP/mixed-port 出站代理的问题，新增标准 HTTP CONNECT 隧道支持
+- 修复旧接管配置保留过期地址、访问令牌或关闭 WebSocket 开关的问题
+
 ## [0.1.0-alpha.11] - 2026-08-09
 
 ### Added

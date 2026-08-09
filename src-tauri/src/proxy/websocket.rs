@@ -2,7 +2,7 @@ use super::*;
 use axum::extract::ws::{Message as ClientMessage, WebSocket};
 use axum::http::header::AUTHORIZATION;
 use futures::SinkExt;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_socks::tcp::Socks5Stream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -282,7 +282,7 @@ async fn connect_upstream_websocket(
         connect_websocket_transport(&target, outbound_proxy),
     )
     .await
-    .map_err(|_| "连接 FlClash SOCKS5 超时".to_string())??;
+    .map_err(|_| "连接 WebSocket 出站代理超时".to_string())??;
     let (socket, response) = client_async_tls_with_config(request, stream, None, None)
         .await
         .map_err(websocket_connect_error)?;
@@ -409,33 +409,109 @@ async fn connect_websocket_transport(
         return Ok(Box::new(stream));
     }
 
-    let proxy = reqwest::Url::parse(&settings.url)
-        .map_err(|error| format!("SOCKS5 代理地址无效: {error}"))?;
-    if !matches!(proxy.scheme(), "socks5" | "socks5h") {
-        return Err("Codex WebSocket 出站代理请使用 socks5:// 或 socks5h:// 地址".to_string());
-    }
+    let proxy =
+        reqwest::Url::parse(&settings.url).map_err(|error| format!("出站代理地址无效: {error}"))?;
     if !proxy.username().is_empty() || proxy.password().is_some() {
-        return Err("Codex WebSocket 暂不支持带账号密码的 SOCKS5 代理".to_string());
+        return Err("Codex WebSocket 暂不支持带账号密码的出站代理".to_string());
     }
     let proxy_host = proxy
         .host_str()
-        .ok_or_else(|| "SOCKS5 代理缺少主机名".to_string())?;
-    let proxy_port = proxy.port().unwrap_or(1080);
-    let stream = if proxy.scheme() == "socks5h" {
-        Socks5Stream::connect((proxy_host, proxy_port), (target_host, target_port))
-            .await
-            .map_err(|error| format!("通过 FlClash SOCKS5H 连接失败: {error}"))?
-    } else {
-        let target_address = tokio::net::lookup_host((target_host, target_port))
-            .await
-            .map_err(|error| format!("解析 WebSocket 上游地址失败: {error}"))?
-            .next()
-            .ok_or_else(|| "WebSocket 上游 DNS 没有返回地址".to_string())?;
-        Socks5Stream::connect((proxy_host, proxy_port), target_address)
-            .await
-            .map_err(|error| format!("通过 FlClash SOCKS5 连接失败: {error}"))?
+        .ok_or_else(|| "出站代理缺少主机名".to_string())?;
+    let stream: BoxedWebSocketIo = match proxy.scheme() {
+        "http" => {
+            let proxy_port = proxy.port().unwrap_or(80);
+            Box::new(connect_http_proxy(proxy_host, proxy_port, target_host, target_port).await?)
+        }
+        "socks5h" => {
+            let proxy_port = proxy.port().unwrap_or(1080);
+            Box::new(
+                Socks5Stream::connect((proxy_host, proxy_port), (target_host, target_port))
+                    .await
+                    .map_err(|error| format!("通过 FlClash SOCKS5H 连接失败: {error}"))?,
+            )
+        }
+        "socks5" => {
+            let proxy_port = proxy.port().unwrap_or(1080);
+            let target_address = tokio::net::lookup_host((target_host, target_port))
+                .await
+                .map_err(|error| format!("解析 WebSocket 上游地址失败: {error}"))?
+                .next()
+                .ok_or_else(|| "WebSocket 上游 DNS 没有返回地址".to_string())?;
+            Box::new(
+                Socks5Stream::connect((proxy_host, proxy_port), target_address)
+                    .await
+                    .map_err(|error| format!("通过 FlClash SOCKS5 连接失败: {error}"))?,
+            )
+        }
+        "https" => {
+            return Err(
+                "Codex WebSocket 暂不支持 HTTPS 出站代理，请使用 HTTP、SOCKS5 或 SOCKS5H 地址"
+                    .to_string(),
+            );
+        }
+        scheme => return Err(format!("Codex WebSocket 不支持 {scheme} 出站代理")),
     };
-    Ok(Box::new(stream))
+    Ok(stream)
+}
+
+async fn connect_http_proxy(
+    proxy_host: &str,
+    proxy_port: u16,
+    target_host: &str,
+    target_port: u16,
+) -> Result<TcpStream, String> {
+    const MAX_CONNECT_RESPONSE_SIZE: usize = 16 * 1024;
+    let mut stream = TcpStream::connect((proxy_host, proxy_port))
+        .await
+        .map_err(|error| format!("连接 HTTP 出站代理失败: {error}"))?;
+    let authority = host_port(target_host, target_port);
+    let request = format!(
+        "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: Keep-Alive\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|error| format!("发送 HTTP CONNECT 请求失败: {error}"))?;
+
+    let mut response = Vec::with_capacity(1024);
+    let mut buffer = [0_u8; 1024];
+    while !response.windows(4).any(|window| window == b"\r\n\r\n") {
+        let read = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("读取 HTTP CONNECT 响应失败: {error}"))?;
+        if read == 0 {
+            return Err("HTTP 出站代理在 CONNECT 完成前关闭了连接".to_string());
+        }
+        response.extend_from_slice(&buffer[..read]);
+        if response.len() > MAX_CONNECT_RESPONSE_SIZE {
+            return Err("HTTP CONNECT 响应头超过 16 KiB".to_string());
+        }
+    }
+
+    let status_line = response
+        .split(|byte| *byte == b'\n')
+        .next()
+        .and_then(|line| std::str::from_utf8(line).ok())
+        .map(str::trim)
+        .ok_or_else(|| "HTTP CONNECT 响应无效".to_string())?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|status| status.parse::<u16>().ok())
+        .ok_or_else(|| format!("HTTP CONNECT 状态行无效: {status_line}"))?;
+    if status != StatusCode::OK.as_u16() {
+        return Err(format!("HTTP 出站代理拒绝 CONNECT: {status_line}"));
+    }
+    Ok(stream)
+}
+
+fn host_port(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 fn websocket_connect_error(error: tokio_tungstenite::tungstenite::Error) -> String {
@@ -633,6 +709,12 @@ mod tests {
         .is_ok());
         assert!(normalize_websocket_request(r#"{"type":"response.cancel"}"#, false).is_err());
         assert!(normalize_websocket_request(r#"{"type":"response.cancel"}"#, true).is_ok());
+    }
+
+    #[test]
+    fn formats_http_connect_authorities() {
+        assert_eq!(host_port("chatgpt.com", 443), "chatgpt.com:443");
+        assert_eq!(host_port("2001:db8::1", 443), "[2001:db8::1]:443");
     }
 
     fn scheduling_account_for_websocket_test(id: &str) -> Account {

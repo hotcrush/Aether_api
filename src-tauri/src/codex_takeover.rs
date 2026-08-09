@@ -133,14 +133,17 @@ pub fn refresh_takeover_token_if_active(
     access_token: &str,
 ) -> Result<(), String> {
     let status = takeover_status(db, proxy_base_url)?;
-    if !status.active {
+    if status.provider_id.as_deref() != Some(AETHER_PROVIDER_ID) {
         return Ok(());
     }
 
     let paths = codex_paths()?;
     let current_config = read_optional(&paths.config_path)?.unwrap_or_default();
-    let updated_config =
-        apply_takeover_config(&current_config, &status.expected_base_url, access_token)?;
+    let updated_config = apply_takeover_config(
+        &current_config,
+        &normalize_url(proxy_base_url),
+        access_token,
+    )?;
     write_text(&paths.config_path, &updated_config)
 }
 
@@ -331,6 +334,36 @@ args = ["mcp-server-fetch"]
         assert_eq!(
             parsed["model_providers"][AETHER_PROVIDER_ID]["experimental_bearer_token"].as_str(),
             Some("sk-local")
+        );
+        assert_eq!(
+            parsed["model_providers"][AETHER_PROVIDER_ID]["supports_websockets"].as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn takeover_overwrites_legacy_websocket_settings() {
+        let input = r#"model_provider = "aether"
+
+[model_providers.aether]
+base_url = "http://127.0.0.1:8080/v1"
+supports_websockets = false
+experimental_bearer_token = "old-token"
+"#;
+
+        let output = apply_takeover_config(input, "http://127.0.0.1:9090/v1", "new-token")
+            .expect("upgrade takeover config");
+        let parsed = output.parse::<DocumentMut>().expect("parse output");
+        let provider = &parsed["model_providers"][AETHER_PROVIDER_ID];
+
+        assert_eq!(
+            provider["base_url"].as_str(),
+            Some("http://127.0.0.1:9090/v1")
+        );
+        assert_eq!(provider["supports_websockets"].as_bool(), Some(true));
+        assert_eq!(
+            provider["experimental_bearer_token"].as_str(),
+            Some("new-token")
         );
     }
 }

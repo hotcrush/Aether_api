@@ -6,7 +6,7 @@ use crate::capacity::CapacityRegistry;
 use crate::cost_guard;
 use crate::db::Db;
 use crate::market::MarketState;
-use crate::{codex_identity, outbound_proxy, proxy};
+use crate::{codex_identity, codex_takeover, outbound_proxy, proxy};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -62,6 +62,14 @@ pub(crate) fn run() {
             let access_token = db
                 .get_or_create_setting("access_token", &generated_token)
                 .expect("初始化本地访问密钥失败");
+            let proxy_base_url = format!("http://127.0.0.1:{proxy_port}/v1");
+            if let Err(error) = codex_takeover::refresh_takeover_token_if_active(
+                &db,
+                &proxy_base_url,
+                &access_token,
+            ) {
+                tracing::warn!(%error, "升级已有 Codex 接管配置失败");
+            }
             let access_token = Arc::new(arc_swap::ArcSwap::new(Arc::new(access_token)));
             let proxy_running = Arc::new(AtomicBool::new(false));
             let capacity = Arc::new(CapacityRegistry::default());

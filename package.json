@@ -1,7 +1,7 @@
 {
   "name": "aether",
   "private": true,
-  "version": "0.1.0-alpha.11",
+  "version": "0.1.0-alpha.12",
   "description": "面向个人开发者的本地 OpenAI/Codex 多上游桌面网关。",
   "homepage": "https://github.com/hotcrush/Aether_api#readme",
   "repository": {
