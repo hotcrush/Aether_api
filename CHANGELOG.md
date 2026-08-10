@@ -38,6 +38,14 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.15] - 2026-08-10
+
+### Fixed
+
+- 修复大型 Responses 请求的 SSE 前导事件超过 64 KiB 后被误判为上游失败的问题
+- 收到 `response.created` 或 `response.in_progress` 后立即向客户端提交响应，避免中转站已计费但结果被丢弃并触发重复请求
+- 将分段 SSE 前导事件安全上限提高到 8 MiB，兼容大型上下文和工具 Schema
+
 ## [0.1.0-alpha.14] - 2026-08-10
 
 ### Fixed

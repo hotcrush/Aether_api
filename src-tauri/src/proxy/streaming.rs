@@ -441,7 +441,7 @@ where
                 }
                 if buffered.len() > MAX_STREAM_BOOTSTRAP_BYTES {
                     return Err(PrepareResponseError::Upstream(
-                        "upstream SSE bootstrap exceeded 64 KiB".to_string(),
+                        "upstream SSE bootstrap exceeded 8 MiB".to_string(),
                     ));
                 }
             }
@@ -483,7 +483,7 @@ pub(super) fn sse_has_payload(buffer: &[u8]) -> bool {
         };
         !matches!(
             value.get("type").and_then(Value::as_str),
-            Some("response.created" | "response.in_progress" | "error" | "response.failed")
+            Some("error" | "response.failed")
         )
     })
 }

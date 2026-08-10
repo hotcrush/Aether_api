@@ -709,10 +709,13 @@ async fn stream_bootstrap_rejects_empty_and_error_before_first_payload() {
         Ok(first_payload.clone()),
         Ok(later_error.clone()),
     ]));
-    let error = read_stream_bootstrap(committed.as_mut(), true)
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("slow_down"));
+    assert_eq!(
+        read_stream_bootstrap(committed.as_mut(), true)
+            .await
+            .unwrap(),
+        first_payload
+    );
+    assert_eq!(committed.next().await.unwrap().unwrap(), later_error);
 
     let output =
         Bytes::from_static(b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n");
@@ -721,9 +724,25 @@ async fn stream_bootstrap_rejects_empty_and_error_before_first_payload() {
         Ok(output.clone()),
     ]));
     let bootstrap = read_stream_bootstrap(ready.as_mut(), true).await.unwrap();
-    assert_eq!(bootstrap, Bytes::from_static(
-        b"data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
+    assert_eq!(
+        bootstrap,
+        Bytes::from_static(b"data: {\"type\":\"response.created\"}\n\n")
+    );
+    assert_eq!(ready.next().await.unwrap().unwrap(), output);
+
+    let large_metadata = "x".repeat(128 * 1024);
+    let large_created = Bytes::from(format!(
+        "data: {{\"type\":\"response.created\",\"response\":{{\"metadata\":\"{large_metadata}\"}}}}\n\n"
     ));
+    let split_at = 70 * 1024;
+    let mut large = Box::pin(futures::stream::iter(vec![
+        Ok::<_, &'static str>(large_created.slice(..split_at)),
+        Ok(large_created.slice(split_at..)),
+    ]));
+    assert_eq!(
+        read_stream_bootstrap(large.as_mut(), true).await.unwrap(),
+        large_created
+    );
 }
 
 #[test]

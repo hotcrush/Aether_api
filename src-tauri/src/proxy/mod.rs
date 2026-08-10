@@ -57,7 +57,7 @@ const MAX_WEIGHTED_SCHEDULES: usize = 4096;
 const MAX_ACCOUNT_ATTEMPTS: usize = 3;
 const REQUEST_STARTUP_BUDGET: Duration = Duration::from_secs(30);
 const UPSTREAM_ERROR_BODY_BUDGET: Duration = Duration::from_secs(2);
-const MAX_STREAM_BOOTSTRAP_BYTES: usize = 64 * 1024;
+const MAX_STREAM_BOOTSTRAP_BYTES: usize = 8 * 1024 * 1024;
 const MAX_STREAM_OBSERVER_EVENT_BYTES: usize = 256 * 1024;
 const MAX_PROXY_REQUEST_BODY_SIZE: usize = 256 * 1024 * 1024;
 /// Global TTL for cooldown entries (max cooldown is 5 minutes, this adds margin).
