@@ -322,6 +322,8 @@ fn log_start(account: &Account, request_id: &str, attempt_index: i64) -> Request
         endpoint_family: "responses".to_string(),
         model: "gpt-5".to_string(),
         streaming: true,
+        transport: "sse".to_string(),
+        outbound_proxy: "direct".to_string(),
     }
 }
 
@@ -413,6 +415,8 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
     let audited = page.items.iter().find(|item| item.id == success).unwrap();
     assert_eq!(audited.upstream_response_model.as_deref(), Some("gpt-5.1"));
     assert_eq!(audited.model_mismatch, Some(true));
+    assert_eq!(audited.transport, "sse");
+    assert_eq!(audited.outbound_proxy, "direct");
     assert!(!page.items[2].message.contains("secret-token"));
 
     let mismatch = db

@@ -35,7 +35,8 @@ pub(super) async fn websocket_upgrade_response(
     websocket: WebSocketUpgrade,
 ) -> Response {
     let capability = RequestCapability::from_request(&uri, &[]);
-    let request_log = ProxyRequestLogContext::new(&state, &method, &uri, &capability, true);
+    let request_log =
+        ProxyRequestLogContext::new(&state, &method, &uri, &capability, true, "websocket");
     if method != Method::GET
         || !is_responses_path(uri.path())
         || !response_path_suffix(uri.path()).is_empty()
@@ -145,7 +146,8 @@ async fn connect_selected_upstream(
     first_request: &str,
 ) -> Result<ConnectedWebSocket, String> {
     let capability = RequestCapability::from_request(uri, first_request.as_bytes());
-    let request_log = ProxyRequestLogContext::new(state, &Method::POST, uri, &capability, true);
+    let request_log =
+        ProxyRequestLogContext::new(state, &Method::POST, uri, &capability, true, "websocket");
     let accounts = state
         .db
         .get_active_accounts_async()
@@ -626,8 +628,9 @@ fn new_websocket_observer(
     body: &[u8],
 ) -> StreamBodyObserver {
     let capability = RequestCapability::from_request(uri, body);
-    let request_log = ProxyRequestLogContext::new(state, &Method::POST, uri, &capability, true)
-        .begin_attempt(Some(account), 1);
+    let request_log =
+        ProxyRequestLogContext::new(state, &Method::POST, uri, &capability, true, "websocket")
+            .begin_attempt(Some(account), 1);
     if let Some(log) = &request_log {
         log.mark_response(StatusCode::SWITCHING_PROTOCOLS.as_u16());
     }

@@ -93,6 +93,8 @@ export interface ProxyInfo {
 }
 
 export type RequestLogStatus = 'pending' | 'success' | 'retry' | 'error' | 'cancelled'
+export type RequestTransport = 'websocket' | 'sse' | 'http' | 'unknown'
+export type RequestOutboundProxy = 'direct' | 'http' | 'http_connect' | 'https' | 'socks5' | 'socks5h' | 'unknown'
 
 export interface RequestLog {
   id: number
@@ -109,6 +111,8 @@ export interface RequestLog {
   status: RequestLogStatus
   http_status: number | null
   streaming: boolean
+  transport: RequestTransport
+  outbound_proxy: RequestOutboundProxy
   ttfb_ms: number | null
   duration_ms: number | null
   input_tokens: number

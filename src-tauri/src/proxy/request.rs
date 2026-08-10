@@ -19,6 +19,7 @@ pub(super) async fn enforce_content_length_limit(
             request.uri(),
             &capability,
             false,
+            "http",
         );
         let message = request_body_limit_message(limit_state.limit);
         log_context.record_local_failure(StatusCode::PAYLOAD_TOO_LARGE, &message);
@@ -55,7 +56,7 @@ pub(super) async fn proxy_handler(
             let rejection_status = rejection.into_response().status();
             let capability = RequestCapability::from_request(&uri, &[]);
             let request_log =
-                ProxyRequestLogContext::new(&state, &method, &uri, &capability, false);
+                ProxyRequestLogContext::new(&state, &method, &uri, &capability, false, "http");
             if rejection_status == StatusCode::PAYLOAD_TOO_LARGE {
                 let message = request_body_limit_message(body_limit.0);
                 request_log.record_local_failure(StatusCode::PAYLOAD_TOO_LARGE, &message);
@@ -73,8 +74,15 @@ pub(super) async fn proxy_handler(
 
     let capability = RequestCapability::from_request(&uri, &body);
     let requested_stream = !is_compact_path(uri.path()) && request_wants_stream(&body);
-    let request_log =
-        ProxyRequestLogContext::new(&state, &method, &uri, &capability, requested_stream);
+    let transport = if requested_stream { "sse" } else { "http" };
+    let request_log = ProxyRequestLogContext::new(
+        &state,
+        &method,
+        &uri,
+        &capability,
+        requested_stream,
+        transport,
+    );
     let authorized_request = {
         let access_token = state.access_token.load();
         authorized(&headers, access_token.as_str())

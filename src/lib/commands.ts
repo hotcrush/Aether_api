@@ -152,8 +152,10 @@ let previewRequestLogs: RequestLog[] = [
     endpoint_family: 'responses',
     model: 'gpt-5.6-sol',
     status: 'pending',
-    http_status: 200,
+    http_status: 101,
     streaming: true,
+    transport: 'websocket',
+    outbound_proxy: 'socks5h',
     ttfb_ms: 426,
     duration_ms: null,
     input_tokens: 0,
@@ -185,6 +187,8 @@ let previewRequestLogs: RequestLog[] = [
     status: 'success',
     http_status: 200,
     streaming: true,
+    transport: 'sse',
+    outbound_proxy: 'http',
     ttfb_ms: 612,
     duration_ms: 4_286,
     input_tokens: 18_420,
@@ -216,6 +220,8 @@ let previewRequestLogs: RequestLog[] = [
     status: 'retry',
     http_status: 429,
     streaming: true,
+    transport: 'sse',
+    outbound_proxy: 'http',
     ttfb_ms: 238,
     duration_ms: 241,
     input_tokens: 0,
@@ -247,6 +253,8 @@ let previewRequestLogs: RequestLog[] = [
     status: 'success',
     http_status: 200,
     streaming: false,
+    transport: 'http',
+    outbound_proxy: 'direct',
     ttfb_ms: 184,
     duration_ms: 186,
     input_tokens: 0,
@@ -278,6 +286,8 @@ let previewRequestLogs: RequestLog[] = [
     status: 'error',
     http_status: 503,
     streaming: false,
+    transport: 'http',
+    outbound_proxy: 'direct',
     ttfb_ms: null,
     duration_ms: 38,
     input_tokens: 0,
@@ -309,6 +319,8 @@ let previewRequestLogs: RequestLog[] = [
     status: 'cancelled',
     http_status: 200,
     streaming: true,
+    transport: 'sse',
+    outbound_proxy: 'socks5h',
     ttfb_ms: 391,
     duration_ms: 1_842,
     input_tokens: 0,
@@ -706,7 +718,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return deleted as T
     }
     case 'get_app_version':
-      return { version: '0.1.0-alpha.12', commit: 'dev', build_time: '2026-08-10' } as T
+      return { version: '0.1.0-alpha.13', commit: 'dev', build_time: '2026-08-10' } as T
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }

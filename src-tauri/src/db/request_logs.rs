@@ -31,6 +31,8 @@ pub struct RequestLog {
     pub status: String,
     pub http_status: Option<i64>,
     pub streaming: bool,
+    pub transport: String,
+    pub outbound_proxy: String,
     pub ttfb_ms: Option<i64>,
     pub duration_ms: Option<i64>,
     pub input_tokens: i64,
@@ -94,6 +96,8 @@ pub(crate) struct RequestLogStart {
     pub endpoint_family: String,
     pub model: String,
     pub streaming: bool,
+    pub transport: String,
+    pub outbound_proxy: String,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -189,6 +193,8 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
             status TEXT NOT NULL DEFAULT 'pending',
             http_status INTEGER,
             streaming INTEGER NOT NULL DEFAULT 0,
+            transport TEXT NOT NULL DEFAULT 'unknown',
+            outbound_proxy TEXT NOT NULL DEFAULT 'unknown',
             ttfb_ms INTEGER,
             duration_ms INTEGER,
             input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -219,6 +225,8 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
     for (name, definition) in [
         ("upstream_response_model", "TEXT"),
         ("model_mismatch", "INTEGER"),
+        ("transport", "TEXT NOT NULL DEFAULT 'unknown'"),
+        ("outbound_proxy", "TEXT NOT NULL DEFAULT 'unknown'"),
     ] {
         if !request_log_column_exists(conn, name)? {
             conn.execute(
@@ -230,6 +238,13 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_request_logs_model_mismatch
             ON request_logs(model_mismatch, id DESC);
+         UPDATE request_logs
+            SET transport = CASE
+                WHEN http_status = 101 OR message LIKE '%WebSocket%' THEN 'websocket'
+                WHEN streaming = 1 THEN 'sse'
+                ELSE 'http'
+            END
+          WHERE transport = 'unknown';
          UPDATE request_logs
             SET status = 'cancelled',
                 message = CASE WHEN message = '' THEN '应用上次退出前请求未完成' ELSE message END,
@@ -266,12 +281,15 @@ impl Db {
         let path = limited_text(start.path.split('?').next().unwrap_or_default(), 500);
         let endpoint_family = limited_text(&start.endpoint_family, 64);
         let model = limited_text(&start.model, 200);
+        let transport = normalize_transport(&start.transport);
+        let outbound_proxy = normalize_outbound_proxy(&start.outbound_proxy);
         let conn = lock_connection(self);
         conn.execute(
             "INSERT INTO request_logs (
                 request_id, attempt_index, account_id, account_name, account_type,
-                source, method, path, endpoint_family, model, streaming
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                source, method, path, endpoint_family, model, streaming, transport,
+                outbound_proxy
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 request_id,
                 start.attempt_index.max(0),
@@ -284,6 +302,8 @@ impl Db {
                 endpoint_family,
                 model,
                 i64::from(start.streaming),
+                transport,
+                outbound_proxy,
             ],
         )?;
         let id = conn.last_insert_rowid();
@@ -398,10 +418,11 @@ impl Db {
             clauses.push(
                 "(request_id LIKE ? ESCAPE '\\' OR account_name LIKE ? ESCAPE '\\'
                   OR model LIKE ? ESCAPE '\\' OR upstream_response_model LIKE ? ESCAPE '\\'
-                  OR path LIKE ? ESCAPE '\\' OR message LIKE ? ESCAPE '\\')"
+                  OR path LIKE ? ESCAPE '\\' OR message LIKE ? ESCAPE '\\'
+                  OR transport LIKE ? ESCAPE '\\' OR outbound_proxy LIKE ? ESCAPE '\\')"
                     .to_string(),
             );
-            for _ in 0..6 {
+            for _ in 0..8 {
                 values.push(SqlValue::Text(pattern.clone()));
             }
         }
@@ -415,7 +436,8 @@ impl Db {
         let sql = format!(
             "SELECT id, request_id, attempt_index, account_id, account_name, account_type,
                     source, method, path, endpoint_family, model, status, http_status,
-                    streaming, ttfb_ms, duration_ms, input_tokens, output_tokens,
+                    streaming, transport, outbound_proxy, ttfb_ms, duration_ms,
+                    input_tokens, output_tokens,
                     cached_tokens, cache_write_tokens, reasoning_tokens, total_tokens,
                     unpriced_tokens, estimated_cost, message, created_at, completed_at,
                     upstream_response_model, model_mismatch
@@ -660,22 +682,45 @@ fn request_log_from_row(row: &rusqlite::Row<'_>) -> SqlResult<RequestLog> {
         status: row.get(11)?,
         http_status: row.get(12)?,
         streaming: row.get::<_, i64>(13)? != 0,
-        ttfb_ms: row.get(14)?,
-        duration_ms: row.get(15)?,
-        input_tokens: row.get(16)?,
-        output_tokens: row.get(17)?,
-        cached_tokens: row.get(18)?,
-        cache_write_tokens: row.get(19)?,
-        reasoning_tokens: row.get(20)?,
-        total_tokens: row.get(21)?,
-        unpriced_tokens: row.get(22)?,
-        estimated_cost: row.get(23)?,
-        message: row.get(24)?,
-        created_at: row.get(25)?,
-        completed_at: row.get(26)?,
-        upstream_response_model: row.get(27)?,
-        model_mismatch: row.get::<_, Option<i64>>(28)?.map(|value| value != 0),
+        transport: row.get(14)?,
+        outbound_proxy: row.get(15)?,
+        ttfb_ms: row.get(16)?,
+        duration_ms: row.get(17)?,
+        input_tokens: row.get(18)?,
+        output_tokens: row.get(19)?,
+        cached_tokens: row.get(20)?,
+        cache_write_tokens: row.get(21)?,
+        reasoning_tokens: row.get(22)?,
+        total_tokens: row.get(23)?,
+        unpriced_tokens: row.get(24)?,
+        estimated_cost: row.get(25)?,
+        message: row.get(26)?,
+        created_at: row.get(27)?,
+        completed_at: row.get(28)?,
+        upstream_response_model: row.get(29)?,
+        model_mismatch: row.get::<_, Option<i64>>(30)?.map(|value| value != 0),
     })
+}
+
+fn normalize_transport(value: &str) -> &'static str {
+    match value {
+        "websocket" => "websocket",
+        "sse" => "sse",
+        "http" => "http",
+        _ => "unknown",
+    }
+}
+
+fn normalize_outbound_proxy(value: &str) -> &'static str {
+    match value {
+        "direct" => "direct",
+        "http" => "http",
+        "http_connect" => "http_connect",
+        "https" => "https",
+        "socks5" => "socks5",
+        "socks5h" => "socks5h",
+        _ => "unknown",
+    }
 }
 
 fn request_log_column_exists(conn: &Connection, column: &str) -> SqlResult<bool> {

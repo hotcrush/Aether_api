@@ -69,6 +69,23 @@ pub fn build_client(
     )
 }
 
+pub(crate) fn request_log_route(settings: &OutboundProxySettings, websocket: bool) -> &'static str {
+    if !settings.enabled {
+        return "direct";
+    }
+    let Ok(url) = reqwest::Url::parse(&settings.url) else {
+        return "unknown";
+    };
+    match (websocket, url.scheme()) {
+        (true, "http") => "http_connect",
+        (_, "http") => "http",
+        (_, "https") => "https",
+        (_, "socks5") => "socks5",
+        (_, "socks5h") => "socks5h",
+        _ => "unknown",
+    }
+}
+
 /// Convert the configured outbound proxy into the schemes supported by Wry/Tauri WebViews.
 /// WebView2 accepts HTTP and SOCKS5 proxy endpoints; SOCKS5H is normalized because Chromium
 /// resolves hostnames through its SOCKS proxy. HTTPS proxy transport is not supported by Wry.

@@ -118,6 +118,8 @@ struct ProxyRequestLogContext {
     endpoint_family: String,
     model: String,
     streaming: bool,
+    transport: String,
+    outbound_proxy: String,
 }
 
 impl ProxyRequestLogContext {
@@ -127,7 +129,12 @@ impl ProxyRequestLogContext {
         uri: &Uri,
         capability: &RequestCapability,
         streaming: bool,
+        transport: &str,
     ) -> Self {
+        let outbound_proxy = crate::outbound_proxy::request_log_route(
+            &crate::outbound_proxy::load(&state.db),
+            transport == "websocket",
+        );
         Self {
             db: Arc::clone(&state.db),
             request_id: uuid::Uuid::new_v4().simple().to_string(),
@@ -136,6 +143,8 @@ impl ProxyRequestLogContext {
             endpoint_family: endpoint_family_name(uri.path()),
             model: capability.model.clone().unwrap_or_default(),
             streaming,
+            transport: transport.to_string(),
+            outbound_proxy: outbound_proxy.to_string(),
         }
     }
 
@@ -160,6 +169,8 @@ impl ProxyRequestLogContext {
             endpoint_family: self.endpoint_family.clone(),
             model: self.model.clone(),
             streaming: self.streaming,
+            transport: self.transport.clone(),
+            outbound_proxy: self.outbound_proxy.clone(),
         };
         match RequestLogHandle::begin(Arc::clone(&self.db), &start) {
             Ok(handle) => Some(handle),

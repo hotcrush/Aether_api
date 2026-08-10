@@ -405,6 +405,8 @@ function LoggerRow({ item }: { item: RequestLog }) {
           </div>
           <div className="logger-request-meta">
             <span>{endpointLabel(item.endpoint_family)}</span>
+            <span data-tooltip="传输协议">{transportLabel(item.transport)}</span>
+            <span data-tooltip="出站路径">{outboundProxyLabel(item.outbound_proxy)}</span>
             {item.model && <span data-tooltip={item.model}>{item.model}</span>}
             {item.upstream_response_model && (
               <span
@@ -417,7 +419,6 @@ function LoggerRow({ item }: { item: RequestLog }) {
                 {item.upstream_response_model}
               </span>
             )}
-            {item.streaming && <span>流式</span>}
             <span>尝试 #{Math.max(0, item.attempt_index)}</span>
             <span className="logger-request-id" data-tooltip={item.request_id}>{shortRequestId(item.request_id)}</span>
           </div>
@@ -509,6 +510,27 @@ function endpointLabel(value: string) {
     case 'models': return 'Models'
     case 'chat_completions': return 'Chat Completions'
     default: return value || 'Other'
+  }
+}
+
+function transportLabel(value: RequestLog['transport']) {
+  switch (value) {
+    case 'websocket': return 'WebSocket'
+    case 'sse': return 'HTTP SSE'
+    case 'http': return 'HTTP'
+    default: return '传输未知'
+  }
+}
+
+function outboundProxyLabel(value: RequestLog['outbound_proxy']) {
+  switch (value) {
+    case 'direct': return '直连'
+    case 'http': return 'HTTP 代理'
+    case 'http_connect': return 'HTTP CONNECT'
+    case 'https': return 'HTTPS 代理'
+    case 'socks5': return 'SOCKS5'
+    case 'socks5h': return 'SOCKS5H'
+    default: return '代理未知'
   }
 }
 

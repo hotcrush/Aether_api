@@ -131,6 +131,8 @@ impl RequestLogHandle {
 }
 
 pub(crate) fn begin_probe(db: Arc<Db>, account: &Account, path: &str) -> Option<RequestLogHandle> {
+    let outbound_proxy =
+        crate::outbound_proxy::request_log_route(&crate::outbound_proxy::load(&db), false);
     let start = RequestLogStart {
         request_id: uuid::Uuid::new_v4().simple().to_string(),
         attempt_index: 1,
@@ -143,6 +145,8 @@ pub(crate) fn begin_probe(db: Arc<Db>, account: &Account, path: &str) -> Option<
         endpoint_family: "models".to_string(),
         model: String::new(),
         streaming: false,
+        transport: "http".to_string(),
+        outbound_proxy: outbound_proxy.to_string(),
     };
     match RequestLogHandle::begin(db, &start) {
         Ok(handle) => Some(handle),
