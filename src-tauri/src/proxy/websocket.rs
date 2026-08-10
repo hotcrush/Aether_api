@@ -12,6 +12,7 @@ use tokio_tungstenite::{client_async_tls_with_config, MaybeTlsStream, WebSocketS
 const RESPONSES_WEBSOCKETS_BETA: &str = "responses_websockets=2026-02-06";
 const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const FIRST_WEBSOCKET_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_WEBSOCKET_START_ATTEMPTS: usize = 2;
 
 trait WebSocketIo: AsyncRead + AsyncWrite {}
 impl<T: AsyncRead + AsyncWrite + ?Sized> WebSocketIo for T {}
@@ -79,11 +80,6 @@ async fn run_websocket_proxy(
         let first_request = receive_first_websocket_request(&mut client).await?;
         let mut connected =
             connect_selected_upstream(&state, &uri, &headers, &first_request).await?;
-        connected
-            .socket
-            .send(UpstreamMessage::Text(first_request.clone().into()))
-            .await
-            .map_err(|error| format!("发送首个 WebSocket 请求失败: {error}"))?;
         relay_websockets(
             &mut client,
             &mut connected.socket,
@@ -206,20 +202,69 @@ async fn connect_selected_upstream(
         };
 
         let codex_version = crate::codex_identity::current_version(&state.codex_version);
-        let connected = tokio::time::timeout_at(
-            startup_deadline,
-            connect_upstream_websocket(
-                &ready,
-                uri,
-                inbound_headers,
-                &codex_version,
-                &outbound_proxy,
-            ),
-        )
-        .await;
-        let (socket, response_headers) = match connected {
-            Ok(Ok(connected)) => connected,
-            Ok(Err(error)) => {
+        let mut socket = None;
+        let mut response_headers = HeaderMap::new();
+        let mut start_error = None;
+        for start_attempt in 1..=MAX_WEBSOCKET_START_ATTEMPTS {
+            let connected = tokio::time::timeout_at(
+                startup_deadline,
+                connect_upstream_websocket(
+                    &ready,
+                    uri,
+                    inbound_headers,
+                    &codex_version,
+                    &outbound_proxy,
+                ),
+            )
+            .await;
+            let (mut candidate, candidate_headers) = match connected {
+                Ok(Ok(connected)) => connected,
+                Ok(Err(error)) => {
+                    start_error = Some(error);
+                    if start_attempt < MAX_WEBSOCKET_START_ATTEMPTS
+                        && tokio::time::Instant::now() < startup_deadline
+                    {
+                        continue;
+                    }
+                    break;
+                }
+                Err(_) => {
+                    start_error = Some("WebSocket 上游连接超时".to_string());
+                    break;
+                }
+            };
+            let first_frame = tokio::time::timeout_at(
+                startup_deadline,
+                candidate.send(UpstreamMessage::Text(first_request.to_owned().into())),
+            )
+            .await;
+            if let Some(error) = match first_frame {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(format!("发送首个 WebSocket 请求失败: {error}")),
+                Err(_) => Some("发送首个 WebSocket 请求超时".to_string()),
+            } {
+                start_error = Some(error.clone());
+                if start_attempt < MAX_WEBSOCKET_START_ATTEMPTS
+                    && tokio::time::Instant::now() < startup_deadline
+                {
+                    warn!(
+                        account_id = %ready.id,
+                        attempt = start_attempt,
+                        %error,
+                        "Codex WebSocket 首帧发送失败，重新建立上游连接"
+                    );
+                    continue;
+                }
+                break;
+            }
+            socket = Some(candidate);
+            response_headers = candidate_headers;
+            start_error = None;
+            break;
+        }
+        let (socket, response_headers) = match (socket, start_error) {
+            (Some(socket), _) => (socket, response_headers),
+            (None, Some(error)) => {
                 if let Some(log) = &attempt_log {
                     log.finish("retry", Some(&error));
                 }
@@ -229,13 +274,13 @@ async fn connect_selected_upstream(
                 last_error = error;
                 continue;
             }
-            Err(_) => {
-                let error = "WebSocket 上游连接超时".to_string();
+            (None, None) => {
+                let error = "WebSocket 上游连接均未建立".to_string();
                 if let Some(log) = &attempt_log {
-                    log.finish("error", Some(&error));
+                    log.finish("retry", Some(&error));
                 }
                 last_error = error;
-                break;
+                continue;
             }
         };
 
@@ -581,10 +626,13 @@ async fn relay_websockets(
             }
             upstream_message = upstream.next() => {
                 let Some(upstream_message) = upstream_message else {
-                    if let Some(observer) = observer.as_mut() {
-                        observer.record_transport_failure("上游 WebSocket 在响应完成前断开");
+                    if observer.is_some() {
+                        if let Some(observer) = observer.as_mut() {
+                            observer.record_transport_failure("上游 WebSocket 在响应完成前断开");
+                        }
+                        return Err("上游 WebSocket 已断开".to_string());
                     }
-                    return Err("上游 WebSocket 已断开".to_string());
+                    return Ok(());
                 };
                 let upstream_message = upstream_message
                     .map_err(|error| format!("读取上游 WebSocket 失败: {error}"))?;
@@ -610,13 +658,36 @@ async fn relay_websockets(
                             .map_err(|error| format!("回复上游 WebSocket 心跳失败: {error}"))?;
                     }
                     UpstreamMessage::Pong(_) | UpstreamMessage::Frame(_) => {}
-                    UpstreamMessage::Close(_) => {
+                    UpstreamMessage::Close(frame) => {
+                        let detail = upstream_close_detail(frame.as_ref());
+                        if observer.is_some() {
+                            if let Some(active) = observer.as_mut() {
+                                active.record_transport_failure(&format!(
+                                    "上游 WebSocket 在响应完成前关闭: {detail}"
+                                ));
+                            }
+                            return Err(format!("上游 WebSocket 已关闭: {detail}"));
+                        }
                         let _ = client.send(ClientMessage::Close(None)).await;
                         return Ok(());
                     }
                 }
             }
         }
+    }
+}
+
+fn upstream_close_detail(
+    frame: Option<&tokio_tungstenite::tungstenite::protocol::CloseFrame>,
+) -> String {
+    let Some(frame) = frame else {
+        return "无关闭帧".to_string();
+    };
+    let reason = frame.reason.trim();
+    if reason.is_empty() {
+        format!("code {}", frame.code)
+    } else {
+        format!("code {}, reason {}", frame.code, reason)
     }
 }
 
