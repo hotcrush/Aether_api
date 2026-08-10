@@ -542,6 +542,12 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
         .initialization_script_for_all_frames(copy_initialization_script(&copy_proof))
         .on_navigation(is_allowed_external_url)
         .on_new_window(move |url, _| {
+            // OAuth providers commonly create an about:blank popup first and
+            // navigate it after the login handoff. Denying that initial popup
+            // leaves the embedded authorization page visibly blank.
+            if url.as_str() == "about:blank" {
+                return NewWindowResponse::Allow;
+            }
             emit_new_tab_requested(&new_tab_app, &new_tab_source_tab_id, &url);
             NewWindowResponse::Deny
         })
@@ -675,6 +681,7 @@ pub(crate) async fn sync_webview_tabs<R: Runtime>(
                 webview.hide().map_err(|error| error.to_string())?;
             }
         }
+        caller.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     };
 
@@ -789,6 +796,21 @@ pub(crate) fn navigate_workspace_webview<R: Runtime>(
         return Ok(false);
     };
     webview.navigate(url).map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub(crate) fn reload_workspace_webview<R: Runtime>(
+    caller: Webview<R>,
+    app: AppHandle<R>,
+    state: State<'_, WorkspaceWebviewState>,
+    tab_id: String,
+) -> Result<bool, String> {
+    ensure_main_caller(&caller)?;
+    let Some(webview) = managed_webview(&app, &state, &tab_id)? else {
+        return Ok(false);
+    };
+    webview.reload().map_err(|error| error.to_string())?;
     Ok(true)
 }
 

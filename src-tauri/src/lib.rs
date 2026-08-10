@@ -9,6 +9,7 @@ mod codex_takeover;
 mod cost_guard;
 mod db;
 mod dns;
+mod image_generation;
 mod logger;
 mod market;
 mod market_notification;

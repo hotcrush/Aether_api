@@ -43,6 +43,7 @@ use tracing::{info, warn};
 use crate::capacity::{CapacityLease, CapacityRegistry};
 use crate::cost_guard::CostGuardSettings;
 use crate::db::{Account, Db, RequestLogStart, RequestLogUsage};
+use crate::image_generation::{self, ImageGenerationSettings};
 use crate::logger::RequestLogHandle;
 use crate::oauth;
 use crate::pricing::{estimate_cost, UsageBreakdown};
@@ -82,6 +83,7 @@ enum EndpointFamily {
 struct RequestCapability {
     endpoint: EndpointFamily,
     model: Option<String>,
+    image_generation: bool,
 }
 
 impl RequestCapability {
@@ -97,7 +99,12 @@ impl RequestCapability {
             let model = model.trim();
             (!model.is_empty()).then(|| model.to_string())
         });
-        Self { endpoint, model }
+        let image_generation = request_uses_image_generation(body);
+        Self {
+            endpoint,
+            model,
+            image_generation,
+        }
     }
 
     fn cooldown_key(&self, account_id: &str) -> Option<CooldownKey> {
@@ -287,6 +294,7 @@ pub struct ProxyState {
     pub client: Arc<arc_swap::ArcSwap<reqwest::Client>>,
     pub access_token: Arc<arc_swap::ArcSwap<String>>,
     pub cost_guard: Arc<arc_swap::ArcSwap<CostGuardSettings>>,
+    pub image_generation: Arc<arc_swap::ArcSwap<ImageGenerationSettings>>,
     pub codex_version: Arc<arc_swap::ArcSwap<String>>,
     app_handle: Option<tauri::AppHandle>,
     capacity: Arc<CapacityRegistry>,
@@ -645,6 +653,7 @@ pub async fn start_proxy_server(
     running: Arc<AtomicBool>,
     capacity: Arc<CapacityRegistry>,
     cost_guard: Arc<arc_swap::ArcSwap<CostGuardSettings>>,
+    image_generation: Arc<arc_swap::ArcSwap<ImageGenerationSettings>>,
     client: Arc<arc_swap::ArcSwap<reqwest::Client>>,
     codex_version: Arc<arc_swap::ArcSwap<String>>,
     app_handle: tauri::AppHandle,
@@ -654,6 +663,7 @@ pub async fn start_proxy_server(
         client,
         access_token,
         cost_guard,
+        image_generation,
         codex_version,
         app_handle: Some(app_handle),
         capacity,

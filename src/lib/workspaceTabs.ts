@@ -1,6 +1,5 @@
 export const INTERNAL_PAGE_IDS = [
   'upstreams',
-  'codex',
   'monitor',
   'market',
   'logs',
@@ -221,17 +220,22 @@ function normalizeWorkspaceState(value: unknown): WorkspaceTabState | null {
     .slice(0, 24)
 
   if (!tabs.length) return null
-  const activeTabId = typeof value.activeTabId === 'string'
-    && tabs.some((tab) => tab.id === value.activeTabId)
-    ? value.activeTabId
+  const requestedActiveTabId = value.activeTabId === 'internal:codex'
+    ? 'internal:settings'
+    : value.activeTabId
+  const activeTabId = typeof requestedActiveTabId === 'string'
+    && tabs.some((tab) => tab.id === requestedActiveTabId)
+    ? requestedActiveTabId
     : tabs[0].id
   return { tabs, activeTabId }
 }
 
 function normalizeWorkspaceTab(value: unknown): WorkspaceTab | null {
   if (!isRecord(value)) return null
-  if (value.kind === 'internal' && isInternalPageId(value.page)) {
-    return createInternalTab(value.page)
+  if (value.kind === 'internal') {
+    // Migrate the former standalone Codex tab into the merged settings tab.
+    const page = value.page === 'codex' ? 'settings' : value.page
+    if (isInternalPageId(page)) return createInternalTab(page)
   }
   return null
 }

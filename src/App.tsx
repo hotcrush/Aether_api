@@ -6,7 +6,6 @@ import { AccountToolbar } from './components/AccountToolbar'
 import { ApiKeyDialog } from './components/ApiKeyDialog'
 import { AppHeader } from './components/AppHeader'
 import { ClipboardImportDialog } from './components/ClipboardImportDialog'
-import { CodexSettingsPanel } from './components/CodexSettingsPanel'
 import { ChannelMonitorPanel } from './components/ChannelMonitorPanel'
 import { DeleteAccountDialog } from './components/DeleteAccountDialog'
 import { DailyBudgetDialog } from './components/DailyBudgetDialog'
@@ -89,6 +88,8 @@ import {
   listenWebviewActivity,
   listenWebviewImportCandidate,
   listenWebviewOpenRequested,
+  reloadWebviewTab,
+  syncWebviewTabs,
 } from './lib/webviewTabs'
 import {
   activateWorkspaceTab,
@@ -219,6 +220,9 @@ export default function App() {
   const notifyWebviewError = useCallback((message: string) => {
     notify(message, true)
   }, [notify])
+  const reloadCurrentWebview = useCallback((tabId: string) => {
+    void reloadWebviewTab(tabId).catch((error) => notify(`网页标签刷新失败：${errorText(error)}`, true))
+  }, [notify])
   const openExternalWebTab = useCallback((url: string, title?: string) => {
     const parsed = parseHttpUrl(url)
     if (!parsed) return
@@ -291,6 +295,20 @@ export default function App() {
         setTabState((current) => closeWorkspaceTab(current, current.activeTabId))
         return
       }
+      if (key === 'r') {
+        event.preventDefault()
+        const active = getActiveWorkspaceTab(tabState)
+        if (active.kind === 'web') {
+          reloadCurrentWebview(active.id)
+        } else {
+          // Close native child WebViews before reloading the main view so stale overlays
+          // cannot retain input focus after Ctrl+R.
+          void syncWebviewTabs({ active: null, openTabIds: [] })
+            .catch(() => undefined)
+            .finally(() => window.location.reload())
+        }
+        return
+      }
       if (/^[1-9]$/.test(key)) {
         event.preventDefault()
         setTabState((current) => activateWorkspaceTabAt(
@@ -301,7 +319,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [reloadCurrentWebview, tabState])
 
   const loadProxy = useCallback(async () => {
     const nextProxy = await getProxyInfo()
@@ -1393,6 +1411,7 @@ export default function App() {
         onMove={(sourceId, targetId, edge) => {
           setTabState((current) => moveWorkspaceTab(current, sourceId, targetId, edge))
         }}
+        onReload={reloadCurrentWebview}
       />
       <div
         className="workspace-view"
@@ -1475,21 +1494,6 @@ export default function App() {
           onDelete={setDeleteTarget}
         />
       </main>
-      ) : activeTab === 'codex' ? (
-      <CodexSettingsPanel
-        proxy={proxy}
-        status={codexTakeover}
-        sessionHistory={codexSessionHistory}
-        busy={busyActions.has('codex-takeover')}
-        migrateHistoryBusy={busyActions.has('codex-history-migrate')}
-        restoreHistoryBusy={busyActions.has('codex-history-restore')}
-        resetTokenBusy={busyActions.has('reset-access-token')}
-        onCopy={copyText}
-        onToggleTakeover={toggleCodexTakeover}
-        onMigrateHistory={migrateCodexSessionHistoryAction}
-        onRestoreHistory={restoreCodexSessionHistoryAction}
-        onResetAccessToken={() => setResetKeyOpen(true)}
-      />
       ) : activeTab === 'logs' ? (
       <LoggerPage />
       ) : activeTab === 'market' ? (
@@ -1502,7 +1506,23 @@ export default function App() {
         }}
       />
       ) : activeTab === 'settings' ? (
-      <SettingsPage onOpenTrash={() => setTrashOpen(true)} />
+      <SettingsPage
+        onOpenTrash={() => setTrashOpen(true)}
+        codex={{
+          proxy,
+          status: codexTakeover,
+          sessionHistory: codexSessionHistory,
+          busy: busyActions.has('codex-takeover'),
+          migrateHistoryBusy: busyActions.has('codex-history-migrate'),
+          restoreHistoryBusy: busyActions.has('codex-history-restore'),
+          resetTokenBusy: busyActions.has('reset-access-token'),
+          onCopy: copyText,
+          onToggleTakeover: toggleCodexTakeover,
+          onMigrateHistory: migrateCodexSessionHistoryAction,
+          onRestoreHistory: restoreCodexSessionHistoryAction,
+          onResetAccessToken: () => setResetKeyOpen(true),
+        }}
+      />
       ) : (
       <main className="monitor-page">
         <ChannelMonitorPanel

@@ -10,6 +10,9 @@ fn test_state() -> ProxyState {
         cost_guard: Arc::new(arc_swap::ArcSwap::new(Arc::new(
             CostGuardSettings::default(),
         ))),
+        image_generation: Arc::new(arc_swap::ArcSwap::new(Arc::new(
+            ImageGenerationSettings::default(),
+        ))),
         codex_version: Arc::new(arc_swap::ArcSwap::new(Arc::new(
             crate::codex_identity::DEFAULT_CODEX_VERSION.to_string(),
         ))),
@@ -36,7 +39,24 @@ fn responses_capability(model: &str) -> RequestCapability {
     RequestCapability {
         endpoint: EndpointFamily::Responses,
         model: Some(model.to_string()),
+        image_generation: false,
     }
+}
+
+#[test]
+fn detects_responses_image_generation_tool() {
+    let uri: Uri = "/v1/responses".parse().unwrap();
+    let image = RequestCapability::from_request(
+        &uri,
+        br#"{"model":"gpt-5.6","tools":[{"type":"image_generation"}]}"#,
+    );
+    assert!(image.image_generation);
+
+    let text = RequestCapability::from_request(
+        &uri,
+        br#"{"model":"gpt-5.6","tools":[{"type":"web_search"}]}"#,
+    );
+    assert!(!text.image_generation);
 }
 
 fn scheduling_account(id: &str, priority: i64) -> Account {
@@ -296,6 +316,7 @@ fn oauth_pool_and_relay_share_responses_candidates_with_model_filtering() {
     let other = RequestCapability {
         endpoint: EndpointFamily::Other,
         model: Some("gpt-5".to_string()),
+        image_generation: false,
     };
     assert!(!account_supports_request(&oauth, &other));
     assert!(account_supports_request(&relay, &other));

@@ -1,20 +1,28 @@
 import { useEffect, useState } from 'react'
-import { Settings, Monitor, Info, MessageSquarePlus, Network, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
+import { Settings, Monitor, Info, MessageSquarePlus, Network, RefreshCw, ShieldCheck, Trash2, Image } from 'lucide-react'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { open } from '@tauri-apps/plugin-shell'
+import { CodexSettingsPanel, type CodexSettingsPanelProps } from './CodexSettingsPanel'
 import {
   getAppVersion,
   getCodexClientSettings,
   getCostGuardSettings,
   getOutboundProxySettings,
+  getImageGenerationSettings,
   syncCodexClientVersion,
   updateCodexClientSettings,
   updateCostGuardSettings,
   updateOutboundProxySettings,
+  updateImageGenerationSettings,
 } from '../lib/commands'
-import type { AppVersion, CodexClientSettings, CostGuardSettings, OutboundProxySettings } from '../types'
+import type { AppVersion, CodexClientSettings, CostGuardSettings, ImageGenerationSettings, OutboundProxySettings } from '../types'
 
-export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
+interface SettingsPageProps {
+  onOpenTrash?: () => void
+  codex?: CodexSettingsPanelProps
+}
+
+export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
   const [autostart, setAutostart] = useState<boolean | null>(null)
   const [autostartBusy, setAutostartBusy] = useState(false)
   const [appVersion, setAppVersion] = useState<AppVersion | null>(null)
@@ -24,6 +32,9 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
   const [outboundProxy, setOutboundProxy] = useState<OutboundProxySettings | null>(null)
   const [outboundProxyBusy, setOutboundProxyBusy] = useState(false)
   const [outboundProxyError, setOutboundProxyError] = useState('')
+  const [imageGeneration, setImageGeneration] = useState<ImageGenerationSettings | null>(null)
+  const [imageGenerationBusy, setImageGenerationBusy] = useState(false)
+  const [imageGenerationError, setImageGenerationError] = useState('')
   const [codexClient, setCodexClient] = useState<CodexClientSettings | null>(null)
   const [codexClientBusy, setCodexClientBusy] = useState(false)
   const [codexClientError, setCodexClientError] = useState('')
@@ -33,6 +44,7 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
     getAppVersion().then(setAppVersion).catch(() => undefined)
     getCostGuardSettings().then(setCostGuard).catch(() => setCostGuardError('无法读取成本保护设置'))
     getOutboundProxySettings().then(setOutboundProxy).catch(() => setOutboundProxyError('无法读取出站代理设置'))
+    getImageGenerationSettings().then(setImageGeneration).catch(() => setImageGenerationError('无法读取图片生成上游设置'))
     getCodexClientSettings().then(setCodexClient).catch(() => setCodexClientError('无法读取 Codex 客户端设置'))
   }, [])
 
@@ -78,6 +90,19 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
       setOutboundProxyError(error instanceof Error ? error.message : '保存出站代理设置失败')
     } finally {
       setOutboundProxyBusy(false)
+    }
+  }
+
+  const saveImageGeneration = async (next: ImageGenerationSettings) => {
+    if (imageGenerationBusy) return
+    setImageGenerationBusy(true)
+    setImageGenerationError('')
+    try {
+      setImageGeneration(await updateImageGenerationSettings(next))
+    } catch (error) {
+      setImageGenerationError(error instanceof Error ? error.message : '保存图片生成上游设置失败')
+    } finally {
+      setImageGenerationBusy(false)
     }
   }
 
@@ -127,6 +152,7 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
 
   return (
     <main className="settings-page">
+      {codex && <CodexSettingsPanel {...codex} />}
       <section className="settings-section" aria-label="通用设置">
         <header className="settings-section-head">
           <Settings size={18} />
@@ -291,6 +317,58 @@ export function SettingsPage({ onOpenTrash }: { onOpenTrash?: () => void }) {
           )}
           <span className="settings-row-desc">默认 <code>http://127.0.0.1:7890</code>。Codex WebSocket 与内置授权页会继承 HTTP、SOCKS5/SOCKS5H 代理；HTTPS 代理用于后端请求。</span>
           {outboundProxyError && <span className="settings-error">{outboundProxyError}</span>}
+        </div>
+
+        <div className="settings-group">
+          <h3>图片生成上游</h3>
+          <div className="settings-row settings-row-top">
+            <div className="settings-row-info">
+              <Image size={16} />
+              <div>
+                <span className="settings-row-label">使用独立图片生成上游</span>
+                <span className="settings-row-desc">识别 Codex 对话内的 image_generation 工具；开启后只为图片请求使用这里的地址和 API Key</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className={`settings-toggle${imageGeneration?.enabled ? ' on' : ''}`}
+              onClick={() => imageGeneration && void saveImageGeneration({ ...imageGeneration, enabled: !imageGeneration.enabled })}
+              disabled={imageGenerationBusy || !imageGeneration}
+              aria-label="切换独立图片生成上游"
+            >
+              <span className="settings-toggle-knob" />
+            </button>
+          </div>
+          {imageGeneration && (
+            <>
+              <label className="outbound-proxy-url">
+                <span>Base URL</span>
+                <input
+                  value={imageGeneration.base_url}
+                  disabled={imageGenerationBusy}
+                  onChange={(event) => setImageGeneration({ ...imageGeneration, base_url: event.target.value })}
+                  onBlur={() => void saveImageGeneration(imageGeneration)}
+                  placeholder="https://api.openai.com/v1"
+                  spellCheck={false}
+                />
+              </label>
+              <label className="outbound-proxy-url">
+                <span>OpenAI API Key</span>
+                <input
+                  type="password"
+                  value={imageGeneration.api_key}
+                  disabled={imageGenerationBusy}
+                  onChange={(event) => setImageGeneration({ ...imageGeneration, api_key: event.target.value })}
+                  onBlur={() => void saveImageGeneration(imageGeneration)}
+                  placeholder="sk-..."
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </label>
+            </>
+          )}
+          <span className="settings-row-desc">默认直连官方 OpenAI；中转站填写兼容 Responses API 的 Base URL（通常以 <code>/v1</code> 结尾）。图片请求仍保留当前出站代理设置。</span>
+          {imageGenerationError && <span className="settings-error">{imageGenerationError}</span>}
         </div>
 
         <div className="settings-group">

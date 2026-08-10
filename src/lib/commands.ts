@@ -13,6 +13,7 @@ import type {
   CodexClientSettings,
   ClipboardImportCandidate,
   CostGuardSettings,
+  ImageGenerationSettings,
   ImportResult,
   OpenAIAuthorization,
   OutboundProxySettings,
@@ -581,6 +582,11 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     case 'update_outbound_proxy_settings':
       window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}outbound-proxy`, JSON.stringify(args?.settings))
       return args?.settings as T
+    case 'get_image_generation_settings':
+      return JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}image-generation`) ?? '{"enabled":false,"base_url":"https://api.openai.com/v1","api_key":""}') as T
+    case 'update_image_generation_settings':
+      window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}image-generation`, JSON.stringify(args?.settings))
+      return args?.settings as T
     case 'get_codex_client_settings':
       return JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}codex-client`) ?? '{"auto_sync_enabled":true,"effective_version":"0.147.0","synced_at":1786032000}') as T
     case 'update_codex_client_settings': {
@@ -718,7 +724,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return deleted as T
     }
     case 'get_app_version':
-      return { version: '0.1.0-alpha.15', commit: 'dev', build_time: '2026-08-10' } as T
+      return { version: '0.1.0-alpha.16', commit: 'dev', build_time: '2026-08-10' } as T
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }
@@ -785,6 +791,12 @@ export const getOutboundProxySettings = () => call<OutboundProxySettings>('get_o
 
 export const updateOutboundProxySettings = (settings: OutboundProxySettings) =>
   call<OutboundProxySettings>('update_outbound_proxy_settings', { settings })
+
+export const getImageGenerationSettings = () =>
+  call<ImageGenerationSettings>('get_image_generation_settings')
+
+export const updateImageGenerationSettings = (settings: ImageGenerationSettings) =>
+  call<ImageGenerationSettings>('update_image_generation_settings', { settings })
 
 export const getCodexClientSettings = () =>
   call<CodexClientSettings>('get_codex_client_settings')

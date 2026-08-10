@@ -38,6 +38,21 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.16] - 2026-08-10
+
+### Added
+
+- 支持为 Codex 内置图片生成配置独立的 Base URL 和 OpenAI API Key，兼容官方 OpenAI 与中转站
+- 在设置页合并 Codex 配置，并兼容旧版配置迁移
+- 为 WebView 标签页增加刷新操作
+
+### Fixed
+
+- 修复图片生成请求未按独立上游配置转发的问题
+- 修复 Ctrl+R 刷新主界面后原生 WebView 标签页失去焦点、无法点击的问题
+- 修复授权页通过 `about:blank` 初始弹窗打开时白屏的问题
+- 修复切换 WebView 标签页后页面未重新获得焦点的问题
+
 ## [0.1.0-alpha.15] - 2026-08-10
 
 ### Fixed

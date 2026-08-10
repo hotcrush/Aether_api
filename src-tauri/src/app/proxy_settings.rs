@@ -1,6 +1,7 @@
 use super::AppState;
 use crate::cost_guard::{self, CostGuardSettings};
 use crate::db::Db;
+use crate::image_generation::{self, ImageGenerationSettings};
 use crate::outbound_proxy::{self, OutboundProxySettings};
 use crate::{codex_identity, codex_takeover, pricing};
 use serde_json::json;
@@ -44,6 +45,23 @@ pub(crate) fn update_outbound_proxy_settings(
     state.client.store(Arc::new(client));
     state.proxy_client.store(Arc::new(proxy_client));
     state.outbound_proxy.store(Arc::new(settings.clone()));
+    Ok(settings)
+}
+
+#[tauri::command]
+pub(crate) fn get_image_generation_settings(
+    state: tauri::State<AppState>,
+) -> ImageGenerationSettings {
+    state.image_generation.load().as_ref().clone()
+}
+
+#[tauri::command]
+pub(crate) fn update_image_generation_settings(
+    state: tauri::State<AppState>,
+    settings: ImageGenerationSettings,
+) -> Result<ImageGenerationSettings, String> {
+    let settings = image_generation::save(&state.db, settings)?;
+    state.image_generation.store(Arc::new(settings.clone()));
     Ok(settings)
 }
 

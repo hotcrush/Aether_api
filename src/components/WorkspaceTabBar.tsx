@@ -9,7 +9,7 @@ import {
   Server,
   Settings,
   Store,
-  Terminal,
+  RotateCw,
   X,
 } from 'lucide-react'
 import {
@@ -33,11 +33,11 @@ interface WorkspaceTabBarProps {
   onHide: (tabId: string) => void
   onOpenPage: (page: InternalPageId) => void
   onMove: (sourceId: string, targetId: string, edge: TabDropEdge) => void
+  onReload?: (tabId: string) => void
 }
 
 const PAGE_META: Record<InternalPageId, { label: string; icon: TabIcon }> = {
   upstreams: { label: '上游管理', icon: Server },
-  codex: { label: 'Codex 配置', icon: Terminal },
   monitor: { label: '渠道监控', icon: Activity },
   market: { label: '市场监控', icon: Store },
   logs: { label: '请求日志', icon: ScrollText },
@@ -60,6 +60,7 @@ export function WorkspaceTabBar({
   onHide,
   onOpenPage,
   onMove,
+  onReload,
 }: WorkspaceTabBarProps) {
   const pickerRef = useRef<HTMLDivElement>(null)
   const addButtonRef = useRef<HTMLButtonElement>(null)
@@ -105,6 +106,7 @@ export function WorkspaceTabBar({
       document.getElementById(`workspace-tab-${tabId}`)?.focus()
     })
   }
+  const activeWebTab = tabs.find((tab) => tab.id === activeTabId && tab.kind === 'web')
 
   return (
     <nav className="workspace-tabs" aria-label="工作区标签页">
@@ -212,6 +214,18 @@ export function WorkspaceTabBar({
           )
         })}
       </div>
+
+      {activeWebTab && onReload && (
+        <button
+          className="workspace-tab-reload"
+          type="button"
+          aria-label="刷新当前网页标签"
+          data-tooltip="刷新当前网页标签"
+          onClick={() => onReload(activeWebTab.id)}
+        >
+          <RotateCw size={15} aria-hidden="true" />
+        </button>
+      )}
 
       <div className="workspace-tab-picker" ref={pickerRef}>
         <button

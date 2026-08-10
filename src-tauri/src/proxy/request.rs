@@ -104,17 +104,25 @@ pub(super) async fn proxy_handler(
         );
     }
 
-    let accounts = match state.db.get_active_accounts_async().await {
-        Ok(accounts) => accounts,
-        Err(error) => {
-            warn!("读取账号失败: {error}");
-            request_log
-                .record_local_failure(StatusCode::INTERNAL_SERVER_ERROR, "failed to load accounts");
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to load accounts",
-                "server_error",
-            );
+    let image_settings = state.image_generation.load_full();
+    let dedicated_image = capability.image_generation && image_settings.enabled;
+    let accounts = if dedicated_image {
+        vec![image_generation::dedicated_account(&image_settings)]
+    } else {
+        match state.db.get_active_accounts_async().await {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                warn!("读取账号失败: {error}");
+                request_log.record_local_failure(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load accounts",
+                );
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to load accounts",
+                    "server_error",
+                );
+            }
         }
     };
     if accounts.is_empty() {
@@ -143,17 +151,19 @@ pub(super) async fn proxy_handler(
         );
     }
 
-    let cost_guard = state.cost_guard.load();
-    if cost_guard.enabled
-        && accounts
-            .iter()
-            .all(|account| !cost_guard.allows(account.rate_multiplier))
-    {
-        let message = "all matching upstream accounts are excluded by cost protection";
-        request_log.record_local_failure(StatusCode::SERVICE_UNAVAILABLE, message);
-        return json_error(StatusCode::SERVICE_UNAVAILABLE, message, "cost_protection");
+    if !dedicated_image {
+        let cost_guard = state.cost_guard.load();
+        if cost_guard.enabled
+            && accounts
+                .iter()
+                .all(|account| !cost_guard.allows(account.rate_multiplier))
+        {
+            let message = "all matching upstream accounts are excluded by cost protection";
+            request_log.record_local_failure(StatusCode::SERVICE_UNAVAILABLE, message);
+            return json_error(StatusCode::SERVICE_UNAVAILABLE, message, "cost_protection");
+        }
+        drop(cost_guard);
     }
-    drop(cost_guard);
 
     let route_key = request_route_key(&headers, &body);
     let (accounts, retry_after, stream_fail_open) =
@@ -191,7 +201,7 @@ pub(super) async fn proxy_handler(
             last_error = "all matching upstream accounts are at capacity".to_string();
             continue;
         };
-        if !state.cost_guard.load().allows(account.rate_multiplier) {
+        if !dedicated_image && !state.cost_guard.load().allows(account.rate_multiplier) {
             last_error =
                 "all matching upstream accounts are excluded by cost protection".to_string();
             continue;
@@ -212,7 +222,9 @@ pub(super) async fn proxy_handler(
                 if let Some(log) = &attempt_log {
                     pending_retry = Some((log.clone(), error.clone()));
                 }
-                let _ = state.db.set_error_async(&account.id, &error).await;
+                if !image_generation::is_dedicated_account(&account) {
+                    let _ = state.db.set_error_async(&account.id, &error).await;
+                }
                 state.cool_down_account(&account.id, Duration::from_secs(60));
                 state.unbind_route(route_key, &account.id);
                 last_error = error;
@@ -226,7 +238,9 @@ pub(super) async fn proxy_handler(
                 if let Some(log) = &attempt_log {
                     log.finish("error", Some(&error));
                 }
-                let _ = state.db.set_error_async(&account.id, &error).await;
+                if !image_generation::is_dedicated_account(&account) {
+                    let _ = state.db.set_error_async(&account.id, &error).await;
+                }
                 state.cool_down_account(&account.id, Duration::from_secs(60));
                 state.unbind_route(route_key, &account.id);
                 last_error = error;
@@ -270,7 +284,9 @@ pub(super) async fn proxy_handler(
                         if let Some(log) = &attempt_log {
                             pending_retry = Some((log.clone(), message.clone()));
                         }
-                        let _ = state.db.set_error_async(&ready.id, &message).await;
+                        if !image_generation::is_dedicated_account(&ready) {
+                            let _ = state.db.set_error_async(&ready.id, &message).await;
+                        }
                         state.cool_down_account(&ready.id, Duration::from_secs(20));
                         state.unbind_route(route_key, &ready.id);
                         last_error = message;
@@ -282,7 +298,9 @@ pub(super) async fn proxy_handler(
                     if let Some(log) = &attempt_log {
                         log.finish("error", Some(&error));
                     }
-                    let _ = state.db.set_error_async(&ready.id, &error).await;
+                    if !image_generation::is_dedicated_account(&ready) {
+                        let _ = state.db.set_error_async(&ready.id, &error).await;
+                    }
                     state.cool_down_account(&ready.id, Duration::from_secs(20));
                     state.unbind_route(route_key, &ready.id);
                     last_error = error;
@@ -312,7 +330,9 @@ pub(super) async fn proxy_handler(
                             log.mark_response(status.as_u16());
                             pending_retry = Some((log.clone(), error.clone()));
                         }
-                        let _ = state.db.set_error_async(&ready.id, &error).await;
+                        if !image_generation::is_dedicated_account(&ready) {
+                            let _ = state.db.set_error_async(&ready.id, &error).await;
+                        }
                         state.cool_down_account(&ready.id, Duration::from_secs(300));
                         state.unbind_route(route_key, &ready.id);
                         last_error = error;
@@ -360,7 +380,9 @@ pub(super) async fn proxy_handler(
                 if let Some(log) = &attempt_log {
                     pending_retry = Some((log.clone(), error.clone()));
                 }
-                let _ = state.db.set_error_async(&ready.id, &error).await;
+                if !image_generation::is_dedicated_account(&ready) {
+                    let _ = state.db.set_error_async(&ready.id, &error).await;
+                }
                 if let Some(scope) = policy.cooldown_scope {
                     state.apply_cooldown(&ready.id, &capability, scope, cooldown);
                 }
@@ -423,7 +445,9 @@ pub(super) async fn proxy_handler(
                     if let Some(log) = &attempt_log {
                         pending_retry = Some((log.clone(), error.clone()));
                     }
-                    let _ = state.db.set_error_async(&ready.id, &error).await;
+                    if !image_generation::is_dedicated_account(&ready) {
+                        let _ = state.db.set_error_async(&ready.id, &error).await;
+                    }
                     state.apply_cooldown(&ready.id, &capability, scope, Duration::from_secs(20));
                     state.unbind_route(route_key, &ready.id);
                     last_error = error;
@@ -434,7 +458,9 @@ pub(super) async fn proxy_handler(
                     if let Some(log) = &attempt_log {
                         log.finish("error", Some(&error));
                     }
-                    let _ = state.db.set_error_async(&ready.id, &error).await;
+                    if !image_generation::is_dedicated_account(&ready) {
+                        let _ = state.db.set_error_async(&ready.id, &error).await;
+                    }
                     state.cool_down_account(&ready.id, Duration::from_secs(20));
                     state.unbind_route(route_key, &ready.id);
                     last_error = error;
@@ -444,7 +470,9 @@ pub(super) async fn proxy_handler(
 
             state.clear_cooldown(&ready.id, &capability);
             state.bind_route(route_key, &ready.id);
-            let _ = state.db.mark_used_async(&ready.id).await;
+            if !image_generation::is_dedicated_account(&ready) {
+                let _ = state.db.mark_used_async(&ready.id).await;
+            }
             if let Some(usage) = usage {
                 let estimate = estimate_cost(&usage, model_hint.as_deref());
                 if let Some(log) = &attempt_log {
@@ -454,17 +482,19 @@ pub(super) async fn proxy_handler(
                         estimate.unpriced_tokens,
                     ));
                 }
-                if let Err(error) = state
-                    .db
-                    .record_usage_async(
-                        &ready.id,
-                        &usage,
-                        estimate.total_cost,
-                        estimate.unpriced_tokens,
-                    )
-                    .await
-                {
-                    warn!(account_id = %ready.id, %error, "记录 Token 用量失败");
+                if !image_generation::is_dedicated_account(&ready) {
+                    if let Err(error) = state
+                        .db
+                        .record_usage_async(
+                            &ready.id,
+                            &usage,
+                            estimate.total_cost,
+                            estimate.unpriced_tokens,
+                        )
+                        .await
+                    {
+                        warn!(account_id = %ready.id, %error, "记录 Token 用量失败");
+                    }
                 }
             }
             if !completion_deferred {

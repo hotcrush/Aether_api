@@ -13,6 +13,21 @@ pub(super) fn extract_model_hint(body: &[u8]) -> Option<String> {
         .and_then(|value| value.get("model").and_then(Value::as_str).map(String::from))
 }
 
+pub(super) fn request_uses_image_generation(body: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let tools_values = [value.get("tools"), value.pointer("/response/tools")];
+    let uses_image_generation = tools_values.into_iter().flatten().any(|tools| {
+        tools.as_array().is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool.get("type").and_then(Value::as_str) == Some("image_generation"))
+        })
+    });
+    uses_image_generation
+}
+
 pub(super) fn extract_usage_from_json_str(text: &str) -> Option<UsageBreakdown> {
     let value: Value = serde_json::from_str(text).ok()?;
     extract_usage_from_value(&value)

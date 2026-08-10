@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import type { CodexSessionHistoryStatus, CodexTakeoverStatus, ProxyInfo } from '../types'
 
-interface CodexSettingsPanelProps {
+export interface CodexSettingsPanelProps {
   proxy: ProxyInfo | null
   status: CodexTakeoverStatus | null
   sessionHistory: CodexSessionHistoryStatus | null

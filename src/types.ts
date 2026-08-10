@@ -57,6 +57,12 @@ export interface OutboundProxySettings {
   url: string
 }
 
+export interface ImageGenerationSettings {
+  enabled: boolean
+  base_url: string
+  api_key: string
+}
+
 export interface CodexClientSettings {
   auto_sync_enabled: boolean
   effective_version: string

@@ -144,14 +144,20 @@ async fn connect_selected_upstream(
     let capability = RequestCapability::from_request(uri, first_request.as_bytes());
     let request_log =
         ProxyRequestLogContext::new(state, &Method::POST, uri, &capability, true, "websocket");
-    let accounts = state
-        .db
-        .get_active_accounts_async()
-        .await
-        .map_err(|error| format!("读取账号失败: {error}"))?
-        .into_iter()
-        .filter(|account| account_supports_request(account, &capability))
-        .collect::<Vec<_>>();
+    let image_settings = state.image_generation.load_full();
+    let dedicated_image = capability.image_generation && image_settings.enabled;
+    let accounts = if dedicated_image {
+        vec![image_generation::dedicated_account(&image_settings)]
+    } else {
+        state
+            .db
+            .get_active_accounts_async()
+            .await
+            .map_err(|error| format!("读取账号失败: {error}"))?
+            .into_iter()
+            .filter(|account| account_supports_request(account, &capability))
+            .collect::<Vec<_>>()
+    };
     if accounts.is_empty() {
         request_log
             .record_local_failure(StatusCode::SERVICE_UNAVAILABLE, "没有支持该模型的可用账号");
@@ -174,7 +180,7 @@ async fn connect_selected_upstream(
             last_error = "所有匹配账号均已达到并发上限".to_string();
             continue;
         };
-        if !state.cost_guard.load().allows(account.rate_multiplier) {
+        if !dedicated_image && !state.cost_guard.load().allows(account.rate_multiplier) {
             last_error = "所有匹配账号均被成本保护排除".to_string();
             continue;
         }
@@ -268,7 +274,9 @@ async fn connect_selected_upstream(
                 if let Some(log) = &attempt_log {
                     log.finish("retry", Some(&error));
                 }
-                let _ = state.db.set_error_async(&ready.id, &error).await;
+                if !image_generation::is_dedicated_account(&ready) {
+                    let _ = state.db.set_error_async(&ready.id, &error).await;
+                }
                 state.cool_down_account(&ready.id, Duration::from_secs(20));
                 state.unbind_route(route_key, &ready.id);
                 last_error = error;
@@ -290,7 +298,9 @@ async fn connect_selected_upstream(
         persist_codex_quota_headers(state, &ready, &response_headers, false);
         state.clear_cooldown(&ready.id, &capability);
         state.bind_route(route_key, &ready.id);
-        let _ = state.db.mark_used_async(&ready.id).await;
+        if !image_generation::is_dedicated_account(&ready) {
+            let _ = state.db.mark_used_async(&ready.id).await;
+        }
         let observer = StreamBodyObserver::new(
             StreamObserverContext {
                 state: Arc::clone(state),

@@ -31,16 +31,18 @@ impl StreamObserverContext {
         message: &str,
         stream_disconnect: bool,
     ) {
-        // Use async DB write if a tokio runtime is available, otherwise fall back to sync
-        if tokio::runtime::Handle::try_current().is_ok() {
-            let db = Arc::clone(&self.state.db);
-            let account_id = self.account_id.clone();
-            let message_owned = message.to_owned();
-            tokio::spawn(async move {
-                let _ = db.set_error_async(&account_id, &message_owned).await;
-            });
-        } else {
-            let _ = self.state.db.set_error(&self.account_id, message);
+        if !image_generation::is_dedicated_account_id(&self.account_id) {
+            // Use async DB write if a tokio runtime is available, otherwise fall back to sync
+            if tokio::runtime::Handle::try_current().is_ok() {
+                let db = Arc::clone(&self.state.db);
+                let account_id = self.account_id.clone();
+                let message_owned = message.to_owned();
+                tokio::spawn(async move {
+                    let _ = db.set_error_async(&account_id, &message_owned).await;
+                });
+            } else {
+                let _ = self.state.db.set_error(&self.account_id, message);
+            }
         }
         if stream_disconnect {
             self.state
@@ -67,6 +69,9 @@ impl StreamObserverContext {
                 estimate.total_cost,
                 estimate.unpriced_tokens,
             ));
+        }
+        if image_generation::is_dedicated_account_id(&self.account_id) {
+            return;
         }
         // Use async DB write if a tokio runtime is available, otherwise fall back to sync
         if tokio::runtime::Handle::try_current().is_ok() {

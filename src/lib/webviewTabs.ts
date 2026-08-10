@@ -56,6 +56,11 @@ export function syncWebviewTabs(input: SyncWebviewTabsInput): Promise<void> {
   return next
 }
 
+export function reloadWebviewTab(tabId: string): Promise<boolean> {
+  if (!isTauriRuntime()) return Promise.resolve(false)
+  return invoke<boolean>('reload_workspace_webview', { tabId })
+}
+
 export function listenWebviewActivity(
   handler: (activity: WebviewActivity) => void,
 ): Promise<UnlistenFn> {

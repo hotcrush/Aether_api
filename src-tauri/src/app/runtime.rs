@@ -6,7 +6,7 @@ use crate::capacity::CapacityRegistry;
 use crate::cost_guard;
 use crate::db::Db;
 use crate::market::MarketState;
-use crate::{codex_identity, codex_takeover, outbound_proxy, proxy};
+use crate::{codex_identity, codex_takeover, image_generation, outbound_proxy, proxy};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -76,6 +76,7 @@ pub(crate) fn run() {
             let openai_callback_ready = Arc::new(AtomicBool::new(false));
             let cost_guard = Arc::new(arc_swap::ArcSwap::new(Arc::new(cost_guard::load(&db))));
             let outbound_proxy_settings = outbound_proxy::load(&db);
+            let image_generation_settings = image_generation::load(&db);
             let client = Arc::new(arc_swap::ArcSwap::new(Arc::new(
                 outbound_proxy::build_client(120, 10, &outbound_proxy_settings)
                     .expect("初始化出站 HTTP 客户端失败"),
@@ -89,6 +90,8 @@ pub(crate) fn run() {
             )));
             let outbound_proxy =
                 Arc::new(arc_swap::ArcSwap::new(Arc::new(outbound_proxy_settings)));
+            let image_generation =
+                Arc::new(arc_swap::ArcSwap::new(Arc::new(image_generation_settings)));
             let legacy_market_dir = std::env::var_os("CODEX_RELAY_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .or_else(|| {
@@ -110,6 +113,7 @@ pub(crate) fn run() {
             let proxy_status = Arc::clone(&proxy_running);
             let proxy_capacity = Arc::clone(&capacity);
             let proxy_cost_guard = Arc::clone(&cost_guard);
+            let proxy_image_generation = Arc::clone(&image_generation);
             let proxy_client = Arc::clone(&proxy_http_client);
             let proxy_codex_version = Arc::clone(&codex_version);
             let proxy_app = app.handle().clone();
@@ -121,6 +125,7 @@ pub(crate) fn run() {
                     proxy_status,
                     proxy_capacity,
                     proxy_cost_guard,
+                    proxy_image_generation,
                     proxy_client,
                     proxy_codex_version,
                     proxy_app,
@@ -140,6 +145,7 @@ pub(crate) fn run() {
                 client,
                 proxy_client: proxy_http_client,
                 outbound_proxy,
+                image_generation,
                 codex_version,
                 proxy_port,
                 proxy_profile,
@@ -229,6 +235,8 @@ pub(crate) fn run() {
             super::proxy_settings::update_cost_guard_settings,
             super::proxy_settings::get_outbound_proxy_settings,
             super::proxy_settings::update_outbound_proxy_settings,
+            super::proxy_settings::get_image_generation_settings,
+            super::proxy_settings::update_image_generation_settings,
             super::proxy_settings::get_codex_client_settings,
             super::proxy_settings::update_codex_client_settings,
             super::proxy_settings::sync_codex_client_version,
@@ -262,6 +270,7 @@ pub(crate) fn run() {
             crate::webview_tabs::close_workspace_webview,
             crate::webview_tabs::set_workspace_webview_bounds,
             crate::webview_tabs::navigate_workspace_webview,
+            crate::webview_tabs::reload_workspace_webview,
             super::accounts::test_account,
             super::usage::query_account_quota,
             super::usage::query_all_quotas,
