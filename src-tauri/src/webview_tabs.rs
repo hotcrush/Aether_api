@@ -542,11 +542,12 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
         .initialization_script_for_all_frames(copy_initialization_script(&copy_proof))
         .on_navigation(is_allowed_external_url)
         .on_new_window(move |url, _| {
-            // OAuth providers commonly create an about:blank popup first and
-            // navigate it after the login handoff. Denying that initial popup
-            // leaves the embedded authorization page visibly blank.
+            // Do not let WebView2 create an unmanaged native popup. In
+            // particular, allowing about:blank creates a full-window popup
+            // that steals focus from every workspace tab. Real destinations
+            // are emitted and opened as managed workspace tabs below.
             if url.as_str() == "about:blank" {
-                return NewWindowResponse::Allow;
+                return NewWindowResponse::Deny;
             }
             emit_new_tab_requested(&new_tab_app, &new_tab_source_tab_id, &url);
             NewWindowResponse::Deny

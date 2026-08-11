@@ -143,6 +143,19 @@ pub(super) async fn send_upstream(
             request.header("Accept", "text/event-stream")
         };
     } else {
+        for name in [
+            "originator",
+            "version",
+            "x-codex-parent-thread-id",
+            "x-codex-routing-hint",
+            "x-openai-subagent",
+            "x-responsesapi-include-timing-metrics",
+            "traceparent",
+        ] {
+            if let Some(value) = inbound_headers.get(name) {
+                request = request.header(name, value);
+            }
+        }
         if let Some(value) = inbound_headers.get("user-agent") {
             request = request.header("User-Agent", value);
         }

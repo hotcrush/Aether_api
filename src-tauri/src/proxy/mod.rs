@@ -188,6 +188,15 @@ impl ProxyRequestLogContext {
         }
     }
 
+    fn with_transport(&self, transport: &str, websocket_outbound: bool) -> Self {
+        let settings = crate::outbound_proxy::load(&self.db);
+        let mut next = self.clone();
+        next.transport = transport.to_string();
+        next.outbound_proxy =
+            crate::outbound_proxy::request_log_route(&settings, websocket_outbound).to_string();
+        next
+    }
+
     fn record_local_failure(&self, http_status: StatusCode, message: &str) {
         if let Some(log) = self.begin_attempt(None, 0) {
             log.mark_response(http_status.as_u16());

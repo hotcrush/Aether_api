@@ -14,6 +14,7 @@ import {
   Terminal,
 } from 'lucide-react'
 import type { CodexSessionHistoryStatus, CodexTakeoverStatus, ProxyInfo } from '../types'
+import { CodexResourcesPanel } from './CodexResourcesPanel'
 
 export interface CodexSettingsPanelProps {
   proxy: ProxyInfo | null
@@ -83,7 +84,7 @@ export function CodexSettingsPanel({
   }, [proxy?.access_token])
 
   return (
-    <main className="codex-page">
+    <div className="codex-page">
       <section className="codex-config" aria-label="Codex 配置">
         <div className="codex-config-head">
           <div className="codex-heading">
@@ -252,7 +253,8 @@ export function CodexSettingsPanel({
           </div>
         </div>
       </section>
-    </main>
+      <CodexResourcesPanel />
+    </div>
   )
 }
 

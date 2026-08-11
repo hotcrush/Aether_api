@@ -215,7 +215,7 @@ function previewMarketSnapshot(): MarketSnapshot {
       fallbackUsed: false, dataMode: 'live',
     },
     lastCheckedAt: '2026-08-01T06:30:00Z',
-    nextRefreshAt: '2026-08-01T06:35:00Z',
+    nextRefreshAt: null,
     unreadAlertCount: 2,
   }
 }

@@ -9,6 +9,8 @@ import type {
   CodexSessionHistoryMigrationResult,
   CodexSessionHistoryRestoreResult,
   CodexSessionHistoryStatus,
+  CodexPromptState,
+  CodexSkillState,
   CodexTakeoverStatus,
   CodexClientSettings,
   ClipboardImportCandidate,
@@ -136,6 +138,38 @@ let previewAccounts: Account[] = [
 let previewAccessToken = 'sk-local-cf4456e6195e4461957af12029f7cdfb'
 let previewCodexTakeoverActive = false
 let previewCodexHistoryBackupAvailable = false
+let previewCodexPromptState: CodexPromptState = {
+  prompts: [{
+    id: 'prompt-preview-review',
+    name: '代码审查',
+    content: '# 工作方式\n\n优先发现行为回归、安全问题和缺失测试。',
+    updated_at: new Date().toISOString(),
+  }],
+  active_id: 'prompt-preview-review',
+  file_path: 'C:\\Users\\demo\\.codex\\AGENTS.md',
+  file_exists: true,
+  current_content: '# 工作方式\n\n优先发现行为回归、安全问题和缺失测试。',
+}
+let previewCodexSkillState: CodexSkillState = {
+  skills: [
+    {
+      directory: 'openai-docs',
+      name: 'OpenAI Docs',
+      description: '查询 OpenAI 与 Codex 官方文档。',
+      enabled: true,
+      path: 'C:\\Users\\demo\\.codex\\skills\\openai-docs',
+    },
+    {
+      directory: 'release-helper',
+      name: 'Release Helper',
+      description: '生成发布说明并检查版本信息。',
+      enabled: false,
+      path: 'C:\\Users\\demo\\.codex\\.aether-disabled-skills\\release-helper',
+    },
+  ],
+  skills_dir: 'C:\\Users\\demo\\.codex\\skills',
+  disabled_dir: 'C:\\Users\\demo\\.codex\\.aether-disabled-skills',
+}
 
 const previewLogTimestamp = (offsetMs: number) => new Date(Date.now() - offsetMs).toISOString()
 
@@ -652,6 +686,72 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         restored_state_rows: 19,
         skipped_reason: null,
       } as T
+    case 'get_codex_prompt_state':
+      return {
+        ...previewCodexPromptState,
+        prompts: previewCodexPromptState.prompts.map((item) => ({ ...item })),
+      } as T
+    case 'save_codex_prompt': {
+      const id = typeof args?.id === 'string' && args.id
+        ? args.id
+        : crypto.randomUUID().replaceAll('-', '')
+      const preset = {
+        id,
+        name: String(args?.name ?? ''),
+        content: String(args?.content ?? ''),
+        updated_at: new Date().toISOString(),
+      }
+      const index = previewCodexPromptState.prompts.findIndex((item) => item.id === id)
+      if (index >= 0) previewCodexPromptState.prompts[index] = preset
+      else previewCodexPromptState.prompts.unshift(preset)
+      if (Boolean(args?.activate) || previewCodexPromptState.active_id === id) {
+        previewCodexPromptState.active_id = id
+        previewCodexPromptState.current_content = preset.content
+        previewCodexPromptState.file_exists = true
+      }
+      return { ...previewCodexPromptState, prompts: previewCodexPromptState.prompts.map((item) => ({ ...item })) } as T
+    }
+    case 'activate_codex_prompt': {
+      const id = String(args?.id ?? '')
+      const preset = previewCodexPromptState.prompts.find((item) => item.id === id)
+      if (!preset) throw new Error('提示词预设不存在')
+      previewCodexPromptState.active_id = id
+      previewCodexPromptState.current_content = preset.content
+      previewCodexPromptState.file_exists = true
+      return { ...previewCodexPromptState, prompts: previewCodexPromptState.prompts.map((item) => ({ ...item })) } as T
+    }
+    case 'import_current_codex_prompt': {
+      const id = crypto.randomUUID().replaceAll('-', '')
+      previewCodexPromptState.prompts.unshift({
+        id,
+        name: '当前 AGENTS.md',
+        content: previewCodexPromptState.current_content,
+        updated_at: new Date().toISOString(),
+      })
+      previewCodexPromptState.active_id = id
+      return { ...previewCodexPromptState, prompts: previewCodexPromptState.prompts.map((item) => ({ ...item })) } as T
+    }
+    case 'delete_codex_prompt': {
+      const id = String(args?.id ?? '')
+      previewCodexPromptState.prompts = previewCodexPromptState.prompts.filter((item) => item.id !== id)
+      if (previewCodexPromptState.active_id === id) previewCodexPromptState.active_id = null
+      return { ...previewCodexPromptState, prompts: previewCodexPromptState.prompts.map((item) => ({ ...item })) } as T
+    }
+    case 'get_codex_skill_state':
+      return { ...previewCodexSkillState, skills: previewCodexSkillState.skills.map((item) => ({ ...item })) } as T
+    case 'set_codex_skill_enabled': {
+      const directory = String(args?.directory ?? '')
+      previewCodexSkillState.skills = previewCodexSkillState.skills.map((item) => item.directory === directory
+        ? {
+            ...item,
+            enabled: Boolean(args?.enabled),
+            path: Boolean(args?.enabled)
+              ? `${previewCodexSkillState.skills_dir}\\${item.directory}`
+              : `${previewCodexSkillState.disabled_dir}\\${item.directory}`,
+          }
+        : item)
+      return { ...previewCodexSkillState, skills: previewCodexSkillState.skills.map((item) => ({ ...item })) } as T
+    }
     case 'get_cache':
       return window.localStorage.getItem(
         `${PREVIEW_CACHE_PREFIX}${String(args?.key ?? '')}`,
@@ -845,6 +945,31 @@ export const migrateCodexSessionHistory = () =>
 
 export const restoreCodexSessionHistory = () =>
   call<CodexSessionHistoryRestoreResult>('restore_codex_session_history')
+
+export const getCodexPromptState = () =>
+  call<CodexPromptState>('get_codex_prompt_state')
+
+export const saveCodexPrompt = (
+  id: string | null,
+  name: string,
+  content: string,
+  activate = false,
+) => call<CodexPromptState>('save_codex_prompt', { id, name, content, activate })
+
+export const activateCodexPrompt = (id: string) =>
+  call<CodexPromptState>('activate_codex_prompt', { id })
+
+export const importCurrentCodexPrompt = () =>
+  call<CodexPromptState>('import_current_codex_prompt')
+
+export const deleteCodexPrompt = (id: string) =>
+  call<CodexPromptState>('delete_codex_prompt', { id })
+
+export const getCodexSkillState = () =>
+  call<CodexSkillState>('get_codex_skill_state')
+
+export const setCodexSkillEnabled = (directory: string, enabled: boolean) =>
+  call<CodexSkillState>('set_codex_skill_enabled', { directory, enabled })
 
 export const queryAccountQuota = (id: string) =>
   call<AccountQuota>('query_account_quota', { id })

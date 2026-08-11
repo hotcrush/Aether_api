@@ -38,6 +38,28 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.17] - 2026-08-12
+
+### Added
+
+- 新增 Codex 提示词预设管理，可导入、编辑并激活 `AGENTS.md`
+- 新增 Codex Skills 管理，可扫描、刷新并可逆启停本地 Skills
+- 新增客户端 WebSocket 到中转站 HTTP/SSE 的协议桥接，并在请求日志中单独标记
+
+### Changed
+
+- 自定义 API Key 中转站默认按 HTTP/SSE Responses 协议连接，SOCKS5/SOCKS5H 仅负责其网络出站；OAuth 与官方 OpenAI API Key 继续使用原生 WebSocket
+- WebSocket 转中转站 HTTP/SSE 时保留 Codex 会话、路由与客户端身份头，按中转站 Responses 协议完成连续请求
+- 店铺监控改为仅由用户手动刷新，不再后台自动采集
+- 更新默认店铺清单，并为已有安装增量加入新增店铺
+- 优化 Codex 扩展布局，提示词与 Skills 使用紧凑的内部滚动区域
+
+### Fixed
+
+- 修复 OpenAI 授权页创建未受管理的 `about:blank` WebView 后遮挡其他标签页点击的问题
+- 修复店铺手动刷新将空计划时间读取为字符串时出现 `invalid type: null` 的问题
+- 修复中转站返回 `no available account` 时未按瞬时容量降载切换渠道的问题
+
 ## [0.1.0-alpha.16] - 2026-08-10
 
 ### Added

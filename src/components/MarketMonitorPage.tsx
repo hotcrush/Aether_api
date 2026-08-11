@@ -22,7 +22,6 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from 'react'
@@ -400,8 +399,7 @@ export function MarketMonitorPage({
           <div className="market-hero-copy">
             <h2>市场监控</h2>
             <p>
-              {snapshot?.nextRefreshAt && <RefreshCountdown target={snapshot.nextRefreshAt} />}
-              {snapshot?.nextRefreshAt && snapshot?.lastCheckedAt && ' · '}
+              手动刷新 · {' '}
               {snapshot?.lastCheckedAt
                 ? `更新于 ${formatDateTime(snapshot.lastCheckedAt)}`
                 : loading ? '正在载入' : '等待首次采集'}
@@ -1356,33 +1354,6 @@ function DeleteShopDialog({
       </div>
     </Dialog>
   )
-}
-
-function RefreshCountdown({ target }: { target: string }) {
-  const [remaining, setRemaining] = useState('')
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  useEffect(() => {
-    const tick = () => {
-      const diff = new Date(target).getTime() - Date.now()
-      if (diff <= 0) {
-        setRemaining('即将刷新')
-        if (intervalRef.current) clearInterval(intervalRef.current)
-        return
-      }
-      const seconds = Math.ceil(diff / 1000)
-      if (seconds >= 60) {
-        setRemaining(`${Math.floor(seconds / 60)}分${seconds % 60}秒后刷新`)
-      } else {
-        setRemaining(`${seconds}秒后刷新`)
-      }
-    }
-    tick()
-    intervalRef.current = setInterval(tick, 1000)
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
-  }, [target])
-
-  return <span className="market-countdown">{remaining}</span>
 }
 
 function protectionLabel(snapshot: MarketSnapshot | null) {

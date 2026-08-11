@@ -1,5 +1,5 @@
 use super::AppState;
-use crate::{codex_history, codex_takeover};
+use crate::{codex_history, codex_resources, codex_takeover};
 
 #[tauri::command]
 pub(crate) fn get_codex_takeover_status(
@@ -49,4 +49,58 @@ pub(crate) fn restore_codex_session_history(
     state: tauri::State<AppState>,
 ) -> Result<codex_history::CodexSessionHistoryRestoreResult, String> {
     codex_history::restore_official_history(&state.app_data_dir)
+}
+
+#[tauri::command]
+pub(crate) fn get_codex_prompt_state(
+    state: tauri::State<AppState>,
+) -> Result<codex_resources::CodexPromptState, String> {
+    codex_resources::prompt_state(&state.db)
+}
+
+#[tauri::command]
+pub(crate) fn save_codex_prompt(
+    state: tauri::State<AppState>,
+    id: Option<String>,
+    name: String,
+    content: String,
+    activate: bool,
+) -> Result<codex_resources::CodexPromptState, String> {
+    codex_resources::save_prompt(&state.db, id, name, content, activate)
+}
+
+#[tauri::command]
+pub(crate) fn activate_codex_prompt(
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<codex_resources::CodexPromptState, String> {
+    codex_resources::activate_prompt(&state.db, &id)
+}
+
+#[tauri::command]
+pub(crate) fn import_current_codex_prompt(
+    state: tauri::State<AppState>,
+) -> Result<codex_resources::CodexPromptState, String> {
+    codex_resources::import_current_prompt(&state.db)
+}
+
+#[tauri::command]
+pub(crate) fn delete_codex_prompt(
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<codex_resources::CodexPromptState, String> {
+    codex_resources::delete_prompt(&state.db, &id)
+}
+
+#[tauri::command]
+pub(crate) fn get_codex_skill_state() -> Result<codex_resources::CodexSkillState, String> {
+    codex_resources::skill_state()
+}
+
+#[tauri::command]
+pub(crate) fn set_codex_skill_enabled(
+    directory: String,
+    enabled: bool,
+) -> Result<codex_resources::CodexSkillState, String> {
+    codex_resources::set_skill_enabled(&directory, enabled)
 }

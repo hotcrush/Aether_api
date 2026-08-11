@@ -5,6 +5,7 @@ mod capacity;
 mod channel_monitor;
 mod codex_history;
 mod codex_identity;
+mod codex_resources;
 mod codex_takeover;
 mod cost_guard;
 mod db;

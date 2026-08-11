@@ -19,11 +19,28 @@ impl<T: AsyncRead + AsyncWrite + ?Sized> WebSocketIo for T {}
 
 type BoxedWebSocketIo = Box<dyn WebSocketIo + Unpin + Send>;
 type UpstreamWebSocket = WebSocketStream<MaybeTlsStream<BoxedWebSocketIo>>;
+type UpstreamHttpStream =
+    Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static>>;
+
+struct PreparedHttpBridgeTurn {
+    stream: UpstreamHttpStream,
+    bootstrap: Bytes,
+    response_headers: reqwest::header::HeaderMap,
+    status: u16,
+}
+
+enum ConnectedTransport {
+    WebSocket {
+        socket: UpstreamWebSocket,
+        first_message: UpstreamMessage,
+    },
+    HttpBridge(PreparedHttpBridgeTurn),
+}
 
 struct ConnectedWebSocket {
     account: Account,
     _capacity_lease: CapacityLease,
-    socket: UpstreamWebSocket,
+    transport: ConnectedTransport,
     observer: StreamBodyObserver,
     route_key: Option<u64>,
 }
@@ -78,18 +95,45 @@ async fn run_websocket_proxy(
 ) {
     let result = async {
         let first_request = receive_first_websocket_request(&mut client).await?;
-        let mut connected =
-            connect_selected_upstream(&state, &uri, &headers, &first_request).await?;
-        relay_websockets(
-            &mut client,
-            &mut connected.socket,
-            &state,
-            &uri,
-            &connected.account,
-            connected.route_key,
-            connected.observer,
-        )
-        .await
+        let connected = connect_selected_upstream(&state, &uri, &headers, &first_request).await?;
+        let ConnectedWebSocket {
+            account,
+            _capacity_lease,
+            transport,
+            observer,
+            route_key,
+        } = connected;
+        match transport {
+            ConnectedTransport::WebSocket {
+                mut socket,
+                first_message,
+            } => {
+                relay_websockets(
+                    &mut client,
+                    &mut socket,
+                    &state,
+                    &uri,
+                    &account,
+                    route_key,
+                    first_message,
+                    observer,
+                )
+                .await
+            }
+            ConnectedTransport::HttpBridge(prepared) => {
+                relay_http_bridge(
+                    &mut client,
+                    &state,
+                    &uri,
+                    &headers,
+                    &account,
+                    route_key,
+                    prepared,
+                    observer,
+                )
+                .await
+            }
+        }
     }
     .await;
 
@@ -168,7 +212,7 @@ async fn connect_selected_upstream(
     let (accounts, _, _) = state.ordered_accounts_for_request(accounts, route_key, &capability);
     let startup_deadline = tokio::time::Instant::now() + REQUEST_STARTUP_BUDGET;
     let outbound_proxy = crate::outbound_proxy::load(&state.db);
-    let mut last_error = "所有上游 WebSocket 连接均失败".to_string();
+    let mut last_error = "所有上游连接均失败".to_string();
     let mut attempts = 0usize;
 
     for account in accounts {
@@ -186,7 +230,16 @@ async fn connect_selected_upstream(
         }
 
         attempts += 1;
-        let attempt_log = request_log.begin_attempt(Some(&account), attempts as i64);
+        let use_http_bridge = should_use_http_bridge(&account);
+        let attempt_request_log = request_log.with_transport(
+            if use_http_bridge {
+                "websocket_http_bridge"
+            } else {
+                "websocket"
+            },
+            !use_http_bridge,
+        );
+        let attempt_log = attempt_request_log.begin_attempt(Some(&account), attempts as i64);
         let ready = match tokio::time::timeout_at(
             startup_deadline,
             ensure_account_ready(state, &account, false),
@@ -207,10 +260,80 @@ async fn connect_selected_upstream(
             }
         };
 
+        if use_http_bridge {
+            let prepared = tokio::time::timeout_at(
+                startup_deadline,
+                prepare_http_bridge_turn(state, &ready, uri, inbound_headers, first_request),
+            )
+            .await;
+            let prepared = match prepared {
+                Ok(Ok(prepared)) => prepared,
+                Ok(Err(error)) => {
+                    let message = format!("{}: {error}", ready.name);
+                    if let Some(log) = &attempt_log {
+                        log.finish("retry", Some(&message));
+                    }
+                    if !error.is_transient_load_shed() {
+                        if !image_generation::is_dedicated_account(&ready) {
+                            let _ = state.db.set_error_async(&ready.id, &message).await;
+                        }
+                        state.apply_cooldown(
+                            &ready.id,
+                            &capability,
+                            error.cooldown_scope(),
+                            Duration::from_secs(20),
+                        );
+                    }
+                    state.unbind_route(route_key, &ready.id);
+                    last_error = message;
+                    continue;
+                }
+                Err(_) => {
+                    let message = format!("{}: HTTP SSE 上游连接超时", ready.name);
+                    if let Some(log) = &attempt_log {
+                        log.finish("retry", Some(&message));
+                    }
+                    state.unbind_route(route_key, &ready.id);
+                    last_error = message;
+                    continue;
+                }
+            };
+
+            if let Some(log) = &attempt_log {
+                log.mark_response(prepared.status);
+            }
+            persist_codex_quota_headers(state, &ready, &prepared.response_headers, false);
+            state.clear_cooldown(&ready.id, &capability);
+            state.bind_route(route_key, &ready.id);
+            if !image_generation::is_dedicated_account(&ready) {
+                let _ = state.db.mark_used_async(&ready.id).await;
+            }
+            let observer = StreamBodyObserver::new(
+                StreamObserverContext {
+                    state: Arc::clone(state),
+                    account_id: ready.id.clone(),
+                    capability,
+                    route_key,
+                    model_hint: extract_model_hint(first_request.as_bytes()),
+                    request_log: attempt_log,
+                },
+                true,
+            );
+            return Ok(ConnectedWebSocket {
+                account: ready,
+                _capacity_lease: capacity_lease,
+                transport: ConnectedTransport::HttpBridge(prepared),
+                observer,
+                route_key,
+            });
+        }
+
         let codex_version = crate::codex_identity::current_version(&state.codex_version);
         let mut socket = None;
+        let mut first_message = None;
         let mut response_headers = HeaderMap::new();
-        let mut start_error = None;
+        let mut start_error: Option<PrepareResponseError> = None;
+        let mut upstream_upgraded = false;
         for start_attempt in 1..=MAX_WEBSOCKET_START_ATTEMPTS {
             let connected = tokio::time::timeout_at(
                 startup_deadline,
@@ -224,9 +347,12 @@ async fn connect_selected_upstream(
             )
             .await;
             let (mut candidate, candidate_headers) = match connected {
-                Ok(Ok(connected)) => connected,
+                Ok(Ok(connected)) => {
+                    upstream_upgraded = true;
+                    connected
+                }
                 Ok(Err(error)) => {
-                    start_error = Some(error);
+                    start_error = Some(PrepareResponseError::Transport(error));
                     if start_attempt < MAX_WEBSOCKET_START_ATTEMPTS
                         && tokio::time::Instant::now() < startup_deadline
                     {
@@ -235,7 +361,9 @@ async fn connect_selected_upstream(
                     break;
                 }
                 Err(_) => {
-                    start_error = Some("WebSocket 上游连接超时".to_string());
+                    start_error = Some(PrepareResponseError::Transport(
+                        "WebSocket 上游连接超时".to_string(),
+                    ));
                     break;
                 }
             };
@@ -249,7 +377,7 @@ async fn connect_selected_upstream(
                 Ok(Err(error)) => Some(format!("发送首个 WebSocket 请求失败: {error}")),
                 Err(_) => Some("发送首个 WebSocket 请求超时".to_string()),
             } {
-                start_error = Some(error.clone());
+                start_error = Some(PrepareResponseError::Transport(error.clone()));
                 if start_attempt < MAX_WEBSOCKET_START_ATTEMPTS
                     && tokio::time::Instant::now() < startup_deadline
                 {
@@ -263,26 +391,59 @@ async fn connect_selected_upstream(
                 }
                 break;
             }
+            let message = match read_websocket_bootstrap(&mut candidate, startup_deadline).await {
+                Ok(message) => message,
+                Err(error) => {
+                    let retry_transport = matches!(error, PrepareResponseError::Transport(_))
+                        && start_attempt < MAX_WEBSOCKET_START_ATTEMPTS
+                        && tokio::time::Instant::now() < startup_deadline;
+                    if retry_transport {
+                        warn!(
+                            account_id = %ready.id,
+                            attempt = start_attempt,
+                            %error,
+                            "Codex WebSocket 首个上游事件失败，重新建立连接"
+                        );
+                    }
+                    start_error = Some(error);
+                    if retry_transport {
+                        continue;
+                    }
+                    break;
+                }
+            };
             socket = Some(candidate);
+            first_message = Some(message);
             response_headers = candidate_headers;
             start_error = None;
             break;
         }
-        let (socket, response_headers) = match (socket, start_error) {
-            (Some(socket), _) => (socket, response_headers),
-            (None, Some(error)) => {
+        let (socket, first_message, response_headers) = match (socket, first_message, start_error) {
+            (Some(socket), Some(first_message), _) => (socket, first_message, response_headers),
+            (None, None, Some(error)) => {
+                let message = format!("{}: {error}", ready.name);
                 if let Some(log) = &attempt_log {
-                    log.finish("retry", Some(&error));
+                    if upstream_upgraded {
+                        log.mark_response(StatusCode::SWITCHING_PROTOCOLS.as_u16());
+                    }
+                    log.finish("retry", Some(&message));
                 }
-                if !image_generation::is_dedicated_account(&ready) {
-                    let _ = state.db.set_error_async(&ready.id, &error).await;
+                if !error.is_transient_load_shed() {
+                    if !image_generation::is_dedicated_account(&ready) {
+                        let _ = state.db.set_error_async(&ready.id, &message).await;
+                    }
+                    state.apply_cooldown(
+                        &ready.id,
+                        &capability,
+                        error.cooldown_scope(),
+                        Duration::from_secs(20),
+                    );
                 }
-                state.cool_down_account(&ready.id, Duration::from_secs(20));
                 state.unbind_route(route_key, &ready.id);
-                last_error = error;
+                last_error = message;
                 continue;
             }
-            (None, None) => {
+            _ => {
                 let error = "WebSocket 上游连接均未建立".to_string();
                 if let Some(log) = &attempt_log {
                     log.finish("retry", Some(&error));
@@ -315,13 +476,90 @@ async fn connect_selected_upstream(
         return Ok(ConnectedWebSocket {
             account: ready,
             _capacity_lease: capacity_lease,
-            socket,
+            transport: ConnectedTransport::WebSocket {
+                socket,
+                first_message,
+            },
             observer,
             route_key,
         });
     }
 
     Err(last_error)
+}
+
+fn should_use_http_bridge(account: &Account) -> bool {
+    if account.account_type == "oauth" {
+        return false;
+    }
+    let base_url = account.base_url.trim();
+    if base_url.is_empty() {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return true;
+    };
+    if matches!(url.scheme(), "ws" | "wss") {
+        return false;
+    }
+    !url.host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("api.openai.com"))
+}
+
+fn prepare_http_bridge_body(request: &str) -> Result<Vec<u8>, String> {
+    let mut value: Value = serde_json::from_str(request)
+        .map_err(|error| format!("Codex WebSocket 请求不是有效 JSON: {error}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "response.create 必须是 JSON 对象".to_string())?;
+    object.remove("type");
+    object.remove("generate");
+    object.insert("stream".to_string(), Value::Bool(true));
+    serde_json::to_vec(&value).map_err(|error| format!("生成 HTTP SSE 请求失败: {error}"))
+}
+
+async fn prepare_http_bridge_turn(
+    state: &Arc<ProxyState>,
+    account: &Account,
+    uri: &Uri,
+    inbound_headers: &HeaderMap,
+    request: &str,
+) -> Result<PreparedHttpBridgeTurn, PrepareResponseError> {
+    let body = prepare_http_bridge_body(request).map_err(PrepareResponseError::Upstream)?;
+    let mut headers = inbound_headers.clone();
+    headers.remove("openai-beta");
+    headers.insert(
+        header::ACCEPT,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    let codex_version = crate::codex_identity::current_version(&state.codex_version);
+    let client = state.client.load_full();
+    let response = send_upstream(
+        client.as_ref(),
+        account,
+        &Method::POST,
+        uri,
+        &headers,
+        &body,
+        &codex_version,
+    )
+    .await
+    .map_err(|error| PrepareResponseError::Transport(error.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(PrepareResponseError::Upstream(
+            upstream_error_summary(response).await,
+        ));
+    }
+    let response_headers = response.headers().clone();
+    let mut stream: UpstreamHttpStream = Box::pin(response.bytes_stream());
+    let bootstrap = read_stream_bootstrap(stream.as_mut(), true).await?;
+    Ok(PreparedHttpBridgeTurn {
+        stream,
+        bootstrap,
+        response_headers,
+        status: status.as_u16(),
+    })
 }
 
 async fn connect_upstream_websocket(
@@ -344,6 +582,51 @@ async fn connect_upstream_websocket(
         .await
         .map_err(websocket_connect_error)?;
     Ok((socket, response.headers().clone()))
+}
+
+async fn read_websocket_bootstrap(
+    socket: &mut UpstreamWebSocket,
+    deadline: tokio::time::Instant,
+) -> Result<UpstreamMessage, PrepareResponseError> {
+    loop {
+        let message = tokio::time::timeout_at(deadline, socket.next())
+            .await
+            .map_err(|_| {
+                PrepareResponseError::Transport("等待 WebSocket 首个上游事件超时".to_string())
+            })?
+            .ok_or_else(|| {
+                PrepareResponseError::Transport("上游 WebSocket 在首个响应事件前断开".to_string())
+            })?
+            .map_err(|error| {
+                PrepareResponseError::Transport(format!("读取 WebSocket 首个上游事件失败: {error}"))
+            })?;
+        match message {
+            UpstreamMessage::Text(text) => {
+                if let Some(error) = stream_payload_error(text.as_bytes()) {
+                    return Err(PrepareResponseError::Upstream(error));
+                }
+                return Ok(UpstreamMessage::Text(text));
+            }
+            UpstreamMessage::Binary(data) => return Ok(UpstreamMessage::Binary(data)),
+            UpstreamMessage::Ping(data) => {
+                socket
+                    .send(UpstreamMessage::Pong(data))
+                    .await
+                    .map_err(|error| {
+                        PrepareResponseError::Transport(format!(
+                            "回复 WebSocket 启动心跳失败: {error}"
+                        ))
+                    })?
+            }
+            UpstreamMessage::Pong(_) | UpstreamMessage::Frame(_) => {}
+            UpstreamMessage::Close(frame) => {
+                return Err(PrepareResponseError::Upstream(format!(
+                    "上游 WebSocket 在首个响应事件前关闭: {}",
+                    upstream_close_detail(frame.as_ref())
+                )));
+            }
+        }
+    }
 }
 
 fn websocket_target_url(
@@ -580,6 +863,227 @@ fn websocket_connect_error(error: tokio_tungstenite::tungstenite::Error) -> Stri
     }
 }
 
+enum HttpBridgeTurnEnd {
+    Completed,
+    Cancelled,
+    ClientClosed,
+    UpstreamFailed,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relay_http_bridge(
+    client: &mut WebSocket,
+    state: &Arc<ProxyState>,
+    uri: &Uri,
+    inbound_headers: &HeaderMap,
+    account: &Account,
+    route_key: Option<u64>,
+    mut prepared: PreparedHttpBridgeTurn,
+    mut observer: StreamBodyObserver,
+) -> Result<(), String> {
+    loop {
+        match relay_http_bridge_turn(client, &mut prepared, &mut observer).await? {
+            HttpBridgeTurnEnd::ClientClosed | HttpBridgeTurnEnd::UpstreamFailed => return Ok(()),
+            HttpBridgeTurnEnd::Completed | HttpBridgeTurnEnd::Cancelled => {}
+        }
+
+        let Some(next_request) = receive_next_http_bridge_request(client).await? else {
+            return Ok(());
+        };
+        let capability = RequestCapability::from_request(uri, next_request.as_bytes());
+        if !account_supports_request(account, &capability) {
+            send_websocket_error(
+                client,
+                StatusCode::BAD_REQUEST,
+                "当前 WebSocket 上游不支持新的请求模型",
+            )
+            .await
+            .map_err(|error| format!("发送 WebSocket 模型错误失败: {error}"))?;
+            return Ok(());
+        }
+        let request_log =
+            ProxyRequestLogContext::new(state, &Method::POST, uri, &capability, true, "websocket")
+                .with_transport("websocket_http_bridge", false);
+        let attempt_log = request_log.begin_attempt(Some(account), 1);
+        let next_prepared =
+            prepare_http_bridge_turn(state, account, uri, inbound_headers, &next_request).await;
+        prepared = match next_prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let message = format!("{}: {error}", account.name);
+                if let Some(log) = &attempt_log {
+                    log.finish("error", Some(&message));
+                }
+                if !error.is_transient_load_shed() {
+                    state.apply_cooldown(
+                        &account.id,
+                        &capability,
+                        error.cooldown_scope(),
+                        Duration::from_secs(20),
+                    );
+                }
+                state.unbind_route(route_key, &account.id);
+                send_websocket_error(client, StatusCode::BAD_GATEWAY, &message)
+                    .await
+                    .map_err(|send_error| format!("发送 HTTP SSE 桥接错误失败: {send_error}"))?;
+                return Ok(());
+            }
+        };
+        if let Some(log) = &attempt_log {
+            log.mark_response(prepared.status);
+        }
+        persist_codex_quota_headers(state, account, &prepared.response_headers, false);
+        state.clear_cooldown(&account.id, &capability);
+        state.bind_route(route_key, &account.id);
+        observer = StreamBodyObserver::new(
+            StreamObserverContext {
+                state: Arc::clone(state),
+                account_id: account.id.clone(),
+                capability,
+                route_key,
+                model_hint: extract_model_hint(next_request.as_bytes()),
+                request_log: attempt_log,
+            },
+            true,
+        );
+    }
+}
+
+async fn relay_http_bridge_turn(
+    client: &mut WebSocket,
+    prepared: &mut PreparedHttpBridgeTurn,
+    observer: &mut StreamBodyObserver,
+) -> Result<HttpBridgeTurnEnd, String> {
+    let mut buffer = std::mem::take(&mut prepared.bootstrap).to_vec();
+    loop {
+        while let Some(event_end) = next_sse_event_end(&buffer) {
+            let event = buffer.drain(..event_end).collect::<Vec<_>>();
+            let terminal = stream_has_terminal_event(&event);
+            let failed = stream_payload_error(&event).is_some();
+            observer.observe_event(&event);
+            let sanitized = sanitize_capacity_shed_sse_event(&event);
+            if let Some(payload) = sse_event_payload(&sanitized)? {
+                client
+                    .send(ClientMessage::Text(payload.into()))
+                    .await
+                    .map_err(|error| format!("向 Codex 转发 HTTP SSE 桥接事件失败: {error}"))?;
+            }
+            if terminal {
+                return Ok(HttpBridgeTurnEnd::Completed);
+            }
+            if failed {
+                return Ok(HttpBridgeTurnEnd::UpstreamFailed);
+            }
+        }
+
+        tokio::select! {
+            client_message = client.recv() => {
+                let Some(client_message) = client_message else {
+                    observer.record_transport_failure("Codex 客户端断开 WebSocket");
+                    return Ok(HttpBridgeTurnEnd::ClientClosed);
+                };
+                let client_message = client_message
+                    .map_err(|error| format!("读取 Codex WebSocket 失败: {error}"))?;
+                match client_message {
+                    ClientMessage::Text(text) => {
+                        let value: Value = serde_json::from_str(text.as_str())
+                            .map_err(|error| format!("Codex WebSocket 请求不是有效 JSON: {error}"))?;
+                        match value.get("type").and_then(Value::as_str) {
+                            Some("response.cancel") => {
+                                let event = json!({
+                                    "type": "response.cancelled",
+                                    "response": { "status": "cancelled" }
+                                }).to_string();
+                                observer.observe_event(event.as_bytes());
+                                client.send(ClientMessage::Text(event.into())).await
+                                    .map_err(|error| format!("发送 WebSocket 取消事件失败: {error}"))?;
+                                return Ok(HttpBridgeTurnEnd::Cancelled);
+                            }
+                            Some("response.create") => {
+                                observer.record_transport_failure(
+                                    "新的 response.create 在上一响应完成前到达",
+                                );
+                                return Err("新的 response.create 在上一响应完成前到达".to_string());
+                            }
+                            _ => return Err("Codex WebSocket 请求类型无效".to_string()),
+                        }
+                    }
+                    ClientMessage::Ping(_) | ClientMessage::Pong(_) => {}
+                    ClientMessage::Close(_) => {
+                        observer.record_transport_failure("Codex 客户端关闭 WebSocket");
+                        return Ok(HttpBridgeTurnEnd::ClientClosed);
+                    }
+                    ClientMessage::Binary(_) => {
+                        return Err("Codex WebSocket 请求必须是 JSON 文本".to_string());
+                    }
+                }
+            }
+            upstream_chunk = prepared.stream.next() => {
+                match upstream_chunk {
+                    Some(Ok(chunk)) => buffer.extend_from_slice(&chunk),
+                    Some(Err(error)) => {
+                        observer.record_transport_failure(&format!("读取 HTTP SSE 上游失败: {error}"));
+                        return Err(format!("读取 HTTP SSE 上游失败: {error}"));
+                    }
+                    None => {
+                        observer.record_eof();
+                        return Err("HTTP SSE 上游在 response.completed 前结束".to_string());
+                    }
+                }
+            }
+        }
+        if buffer.len() > MAX_STREAM_BOOTSTRAP_BYTES {
+            observer.record_transport_failure("HTTP SSE 单个事件超过 8 MiB");
+            return Err("HTTP SSE 单个事件超过 8 MiB".to_string());
+        }
+    }
+}
+
+async fn receive_next_http_bridge_request(
+    client: &mut WebSocket,
+) -> Result<Option<String>, String> {
+    loop {
+        let Some(message) = client.recv().await else {
+            return Ok(None);
+        };
+        let message = message.map_err(|error| format!("读取 Codex WebSocket 请求失败: {error}"))?;
+        match message {
+            ClientMessage::Text(text) => {
+                let normalized = normalize_websocket_request(text.as_str(), true)?;
+                let value: Value = serde_json::from_str(&normalized)
+                    .map_err(|error| format!("Codex WebSocket 请求不是有效 JSON: {error}"))?;
+                if value.get("type").and_then(Value::as_str) == Some("response.cancel") {
+                    continue;
+                }
+                return Ok(Some(normalized));
+            }
+            ClientMessage::Ping(_) | ClientMessage::Pong(_) => continue,
+            ClientMessage::Close(_) => return Ok(None),
+            ClientMessage::Binary(_) => {
+                return Err("Codex WebSocket 请求必须是 JSON 文本".to_string())
+            }
+        }
+    }
+}
+
+fn sse_event_payload(event: &[u8]) -> Result<Option<String>, String> {
+    let text = std::str::from_utf8(event)
+        .map_err(|error| format!("HTTP SSE 上游返回了非 UTF-8 数据: {error}"))?;
+    let normalized = text.replace("\r\n", "\n");
+    let data = normalized
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let data = data.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return Ok(None);
+    }
+    serde_json::from_str::<Value>(data)
+        .map_err(|error| format!("HTTP SSE data 不是有效 JSON: {error}"))?;
+    Ok(Some(data.to_string()))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn relay_websockets(
     client: &mut WebSocket,
@@ -588,9 +1092,32 @@ async fn relay_websockets(
     uri: &Uri,
     account: &Account,
     route_key: Option<u64>,
+    first_message: UpstreamMessage,
     first_observer: StreamBodyObserver,
 ) -> Result<(), String> {
     let mut observer = Some(first_observer);
+    match first_message {
+        UpstreamMessage::Text(text) => {
+            let terminal = stream_has_terminal_event(text.as_bytes());
+            if let Some(active) = observer.as_mut() {
+                active.observe_event(text.as_bytes());
+            }
+            client
+                .send(ClientMessage::Text(text.to_string().into()))
+                .await
+                .map_err(|error| format!("向 Codex 转发 WebSocket 首个事件失败: {error}"))?;
+            if terminal {
+                observer = None;
+            }
+        }
+        UpstreamMessage::Binary(data) => {
+            client
+                .send(ClientMessage::Binary(data))
+                .await
+                .map_err(|error| format!("向 Codex 转发 WebSocket 首个二进制帧失败: {error}"))?;
+        }
+        _ => return Err("WebSocket 启动阶段返回了无效首帧".to_string()),
+    }
     loop {
         tokio::select! {
             client_message = client.recv() => {
@@ -793,6 +1320,36 @@ mod tests {
         .is_ok());
         assert!(normalize_websocket_request(r#"{"type":"response.cancel"}"#, false).is_err());
         assert!(normalize_websocket_request(r#"{"type":"response.cancel"}"#, true).is_ok());
+    }
+
+    #[test]
+    fn bridges_custom_relays_but_keeps_official_openai_websockets() {
+        let mut relay = scheduling_account_for_websocket_test("relay");
+        relay.account_type = "api_key".to_string();
+        relay.base_url = "https://relay.example/v1".to_string();
+        assert!(should_use_http_bridge(&relay));
+
+        relay.base_url = "https://api.openai.com/v1".to_string();
+        assert!(!should_use_http_bridge(&relay));
+
+        relay.base_url = "wss://relay.example/v1".to_string();
+        assert!(!should_use_http_bridge(&relay));
+    }
+
+    #[test]
+    fn converts_response_create_into_http_responses_body() {
+        let body = prepare_http_bridge_body(
+            r#"{"type":"response.create","generate":true,"model":"gpt-5.6","stream":false,"previous_response_id":"resp_1"}"#,
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert!(value.get("type").is_none());
+        assert!(value.get("generate").is_none());
+        assert_eq!(value.get("stream"), Some(&Value::Bool(true)));
+        assert_eq!(
+            value.get("previous_response_id").and_then(Value::as_str),
+            Some("resp_1")
+        );
     }
 
     #[test]

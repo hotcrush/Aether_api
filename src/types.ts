@@ -99,7 +99,7 @@ export interface ProxyInfo {
 }
 
 export type RequestLogStatus = 'pending' | 'success' | 'retry' | 'error' | 'cancelled'
-export type RequestTransport = 'websocket' | 'sse' | 'http' | 'unknown'
+export type RequestTransport = 'websocket' | 'websocket_http_bridge' | 'sse' | 'http' | 'unknown'
 export type RequestOutboundProxy = 'direct' | 'http' | 'http_connect' | 'https' | 'socks5' | 'socks5h' | 'unknown'
 
 export interface RequestLog {
@@ -184,6 +184,35 @@ export interface CodexSessionHistoryRestoreResult {
   restored_jsonl_files: number
   restored_state_rows: number
   skipped_reason: string | null
+}
+
+export interface CodexPromptPreset {
+  id: string
+  name: string
+  content: string
+  updated_at: string
+}
+
+export interface CodexPromptState {
+  prompts: CodexPromptPreset[]
+  active_id: string | null
+  file_path: string
+  file_exists: boolean
+  current_content: string
+}
+
+export interface CodexSkillEntry {
+  directory: string
+  name: string
+  description: string
+  enabled: boolean
+  path: string
+}
+
+export interface CodexSkillState {
+  skills: CodexSkillEntry[]
+  skills_dir: string
+  disabled_dir: string
 }
 
 export interface ImportMessage {

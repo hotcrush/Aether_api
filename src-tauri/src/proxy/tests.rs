@@ -654,6 +654,7 @@ fn stream_load_shed_errors_keep_their_machine_code() {
     assert!(summary.contains("server_is_overloaded"));
     assert!(is_transient_load_shed_message(&summary));
     assert!(is_transient_load_shed_message("slow_down: retry later"));
+    assert!(is_transient_load_shed_message("no available account"));
     assert!(!is_transient_load_shed_message("quota exhausted"));
     let sse = b"event: error\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"slow_down\",\"message\":\"retry\"}}}\n\n";
     assert!(is_transient_load_shed_message(

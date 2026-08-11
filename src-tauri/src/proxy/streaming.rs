@@ -737,7 +737,9 @@ pub(super) fn stream_error_from_value(value: &Value) -> Option<String> {
 
 pub(super) fn is_transient_load_shed_message(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
-    message.contains("server_is_overloaded") || message.contains("slow_down")
+    message.contains("server_is_overloaded")
+        || message.contains("slow_down")
+        || message.contains("no available account")
 }
 
 pub(super) fn completed_response_from_sse(text: &str) -> Option<Value> {

@@ -19,7 +19,7 @@ use tokio::sync::{Mutex, RwLock};
 
 const API_BASES: [&str; 2] = ["https://www.ldxp.cn", "https://pay.ldxp.cn"];
 const SHOP_BASE: &str = "https://pay.ldxp.cn";
-const REFRESH_SECONDS: i64 = 90;
+const STORE_BACKOFF_BASE_SECONDS: i64 = 90;
 const REQUEST_SPACING_MS: i64 = 300;
 const MANUAL_COOLDOWN_SECONDS: i64 = 30;
 const PROFILE_CACHE_SECONDS: i64 = 60 * 60;
@@ -56,7 +56,10 @@ impl MarketState {
                 }
             }
         }
-        let snapshot = database.load_snapshot()?;
+        let mut snapshot = database.load_snapshot()?;
+        // Store collection is user-triggered. Ignore schedules persisted by
+        // older builds so the UI never advertises a refresh that will not run.
+        snapshot.next_refresh_at = None;
         Ok(Arc::new(Self {
             database,
             client,
@@ -67,46 +70,11 @@ impl MarketState {
         }))
     }
 
-    pub fn start(state: Arc<Self>) {
-        tauri::async_runtime::spawn(async move {
-            loop {
-                let wait = {
-                    let snapshot = state.snapshot.read().await;
-                    snapshot
-                        .next_refresh_at
-                        .as_deref()
-                        .and_then(parse_time)
-                        .map(|target| (target - Utc::now()).to_std().unwrap_or_default())
-                        .unwrap_or_default()
-                };
-                if !wait.is_zero() {
-                    tokio::time::sleep(wait).await;
-                }
-                match state.refresh(false).await {
-                    Ok(result) if !result.performed => {
-                        let retry_wait = result
-                            .retry_at
-                            .as_deref()
-                            .and_then(parse_time)
-                            .map(|target| (target - Utc::now()).to_std().unwrap_or_default())
-                            .unwrap_or_else(|| Duration::from_secs(1));
-                        tokio::time::sleep(retry_wait.max(Duration::from_secs(1))).await;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::warn!(%error, "市场监控刷新失败");
-                        tokio::time::sleep(Duration::from_secs(30)).await;
-                    }
-                }
-            }
-        });
-    }
-
     pub async fn current_snapshot(&self) -> MarketSnapshot {
         self.snapshot.read().await.clone()
     }
 
-    pub async fn refresh(&self, manual: bool) -> Result<MarketRefreshResult, String> {
+    pub async fn refresh(&self) -> Result<MarketRefreshResult, String> {
         let _guard = match self.refresh_gate.try_lock() {
             Ok(guard) => guard,
             Err(_) => {
@@ -135,7 +103,7 @@ impl MarketState {
             }
         }
         let has_usable_snapshot = !previous.products.is_empty();
-        if manual && has_usable_snapshot {
+        if has_usable_snapshot {
             if let Some(last_attempt) = previous
                 .protection
                 .last_attempt_at
@@ -145,7 +113,7 @@ impl MarketState {
                 let retry_at = last_attempt + ChronoDuration::seconds(MANUAL_COOLDOWN_SECONDS);
                 if retry_at > now {
                     let mut result =
-                        deferred_result("cooldown", "手动刷新仍在三分钟冷却期", &previous);
+                        deferred_result("cooldown", "手动刷新仍在 30 秒冷却期", &previous);
                     result.retry_at = Some(retry_at.to_rfc3339());
                     return Ok(result);
                 }
@@ -330,7 +298,7 @@ impl MarketState {
                         failed.failure_count += 1;
                         failed.error = Some(error.chars().take(180).collect());
                         let backoff = if has_usable_snapshot {
-                            (REFRESH_SECONDS
+                            (STORE_BACKOFF_BASE_SECONDS
                                 * 2_i64.pow((failed.failure_count - 1).clamp(0, 5) as u32))
                             .min(MAX_BACKOFF_SECONDS)
                         } else {
@@ -478,30 +446,13 @@ impl MarketState {
         } else {
             "error"
         };
-        let base_next_seconds = if success_count > 0 {
-            REFRESH_SECONDS
-        } else if !has_usable_snapshot {
-            BOOTSTRAP_RECOVERY_SECONDS
-        } else {
-            (REFRESH_SECONDS * 2_i64.pow(protection.consecutive_failures.clamp(0, 4) as u32))
-                .min(MAX_BACKOFF_SECONDS)
-        };
-        let circuit_wait_seconds = protection
-            .circuit_open_until
-            .as_deref()
-            .and_then(parse_time)
-            .map(|until| (until - Utc::now()).num_seconds().max(0))
-            .unwrap_or_default();
-        let next_seconds = base_next_seconds.max(circuit_wait_seconds);
         let mut snapshot = MarketSnapshot {
             status: status.to_string(),
             products,
             shops,
             protection,
             last_checked_at: Some(captured_at),
-            next_refresh_at: Some(
-                (Utc::now() + ChronoDuration::seconds(next_seconds)).to_rfc3339(),
-            ),
+            next_refresh_at: None,
             unread_alert_count: previous.unread_alert_count,
         };
         let inserted = self.database.persist_refresh(

@@ -26,7 +26,7 @@ pub async fn get_market_snapshot(
 pub async fn refresh_market(
     state: State<'_, Arc<MarketState>>,
 ) -> Result<MarketRefreshResult, String> {
-    state.refresh(true).await
+    state.refresh().await
 }
 
 #[tauri::command]

@@ -705,6 +705,7 @@ fn request_log_from_row(row: &rusqlite::Row<'_>) -> SqlResult<RequestLog> {
 fn normalize_transport(value: &str) -> &'static str {
     match value {
         "websocket" => "websocket",
+        "websocket_http_bridge" => "websocket_http_bridge",
         "sse" => "sse",
         "http" => "http",
         _ => "unknown",

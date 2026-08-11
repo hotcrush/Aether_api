@@ -8,29 +8,51 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const DEFAULT_SHOPS: &[(&str, &str)] = &[
-    ("echo_dream", "AI小铺"),
-    ("saki", "Saki"),
-    ("youzhi", "优质AI科技"),
+    ("harvey", "派大星"),
     ("GUEOI7Z9", "鹰鹰小铺"),
-    ("2VWX76A4", "牟利ai"),
-    ("mirage", "幻境MirageAI"),
-    ("PAXOVOVJ", "奥特曼严选"),
-    ("yimengai", "一梦AI"),
-    ("harvey", "harvey"),
-    ("Tora", "雪诺AI分销"),
     ("OUJ1HPBV", "chiyu"),
+    ("yimengai", "一梦AI"),
+    ("Tora", "Tora-雪诺AI代购娘小铺"),
+    ("2VWX76A4", "牟利ai"),
     ("911", "金幺の小店"),
-    ("ymymai", "亚米整合服务"),
     ("P98T49H8", "稳中求胜"),
-    ("aica", "AICA源头直供"),
+    ("TH52WUW7", "boji1334yd"),
+    ("YA3NLPX6", "AI小店"),
+    ("wuku", "老马AI（源头直供，招代理）"),
+    ("youzhi", "优质AI科技"),
+    ("YUJI", "YUJI"),
+    ("ymymai", "亚米整合服务供应商"),
+    ("FRNX1ZU8", "追梦AI"),
+    ("7HVUEC3Y", "464"),
+    ("M18V0XVF", "陆柒科技"),
+    ("5KF19IU0", "链动小铺 / 5KF19IU0"),
+    ("3GYP7PKO", "直连AI"),
+    ("mirage", "幻境MirageAI"),
+    ("echo_dream", "AI小铺"),
     ("SubAIP", "AI源头批发旗舰店"),
-    ("GT7KX1TN", "光之国AI"),
-    ("2W1EEK4J", "AI主理人"),
-    ("wuku", "老马AI"),
-    ("luoerl", "与世隔绝AI小店"),
-    ("ming", "ming的AI商店"),
-    ("one", "云边小铺"),
+    ("SJ1BEJAC", "商家8719"),
+    ("GU3XQH61", "NiuGe AI 加钟站"),
+    ("luoerl", "链动小铺 / luoerl"),
+    ("ZPISRC7G", "琪琪科技"),
+    ("5OFQXIM1", "冷热lab"),
 ];
+
+const NEW_DEFAULT_SHOPS_2026_08_12: &[(&str, &str)] = &[
+    ("TH52WUW7", "boji1334yd"),
+    ("YA3NLPX6", "AI小店"),
+    ("YUJI", "YUJI"),
+    ("FRNX1ZU8", "追梦AI"),
+    ("7HVUEC3Y", "464"),
+    ("M18V0XVF", "陆柒科技"),
+    ("5KF19IU0", "链动小铺 / 5KF19IU0"),
+    ("3GYP7PKO", "直连AI"),
+    ("SJ1BEJAC", "商家8719"),
+    ("GU3XQH61", "NiuGe AI 加钟站"),
+    ("ZPISRC7G", "琪琪科技"),
+    ("5OFQXIM1", "冷热lab"),
+];
+
+const DEFAULT_SHOPS_MIGRATION: &str = "default_shops_2026_08_12";
 
 #[derive(Debug)]
 pub struct MarketDatabase {
@@ -147,21 +169,41 @@ impl MarketDatabase {
     }
 
     fn seed_default_shops(&self, conn: &mut Connection) -> Result<(), String> {
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM market_shops", [], |row| row.get(0))
+        let migrated: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM market_runtime WHERE key=?1)",
+                [DEFAULT_SHOPS_MIGRATION],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())?;
-        if count > 0 {
+        if migrated {
             return Ok(());
         }
         let tx = conn.transaction().map_err(|error| error.to_string())?;
-        for (index, (token, name)) in DEFAULT_SHOPS.iter().enumerate() {
+        let existing_shop_count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM market_shops", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        let shops = if existing_shop_count == 0 {
+            DEFAULT_SHOPS
+        } else {
+            NEW_DEFAULT_SHOPS_2026_08_12
+        };
+        let display_order: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(display_order), -1) + 1 FROM market_shops",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        for (index, (token, name)) in shops.iter().enumerate() {
             tx.execute(
-                "INSERT INTO market_shops(token, platform, fallback_name, name, enabled, display_order)
+                "INSERT OR IGNORE INTO market_shops(token, platform, fallback_name, name, enabled, display_order)
                  VALUES(?1, 'liandx', ?2, ?2, 1, ?3)",
-                params![token, name, index as i64],
+                params![token, name, display_order + index as i64],
             )
             .map_err(|error| error.to_string())?;
         }
+        set_runtime_tx(&tx, DEFAULT_SHOPS_MIGRATION, &true)?;
         tx.commit().map_err(|error| error.to_string())
     }
 
@@ -255,8 +297,12 @@ impl MarketDatabase {
         let protection = self
             .get_runtime_from::<MarketProtection>(&conn, "protection")?
             .unwrap_or_else(|| MarketSnapshot::default().protection);
-        let last_checked_at = self.get_runtime_from::<String>(&conn, "last_checked_at")?;
-        let next_refresh_at = self.get_runtime_from::<String>(&conn, "next_refresh_at")?;
+        let last_checked_at = self
+            .get_runtime_from::<Option<String>>(&conn, "last_checked_at")?
+            .flatten();
+        let next_refresh_at = self
+            .get_runtime_from::<Option<String>>(&conn, "next_refresh_at")?
+            .flatten();
         let unread_alert_count = conn
             .query_row(
                 "SELECT COUNT(*) FROM market_events WHERE read_at IS NULL",

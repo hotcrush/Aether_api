@@ -161,7 +161,6 @@ pub(crate) fn run() {
             app.manage(VaultState::new(app_dir.join("vault.stronghold")));
             app.manage(crate::webview_tabs::WorkspaceWebviewState::default());
             app.manage(Arc::clone(&market));
-            MarketState::start(market);
             let callback_app = app.handle().clone();
             tauri::async_runtime::spawn(super::accounts::start_openai_callback_server(
                 callback_app,
@@ -286,6 +285,13 @@ pub(crate) fn run() {
             super::codex::has_codex_session_history_backup,
             super::codex::migrate_codex_session_history,
             super::codex::restore_codex_session_history,
+            super::codex::get_codex_prompt_state,
+            super::codex::save_codex_prompt,
+            super::codex::activate_codex_prompt,
+            super::codex::import_current_codex_prompt,
+            super::codex::delete_codex_prompt,
+            super::codex::get_codex_skill_state,
+            super::codex::set_codex_skill_enabled,
             super::vault::init_vault,
             super::vault::lock_vault,
             super::vault::is_vault_unlocked,

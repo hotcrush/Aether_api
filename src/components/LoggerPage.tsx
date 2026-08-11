@@ -516,6 +516,7 @@ function endpointLabel(value: string) {
 function transportLabel(value: RequestLog['transport']) {
   switch (value) {
     case 'websocket': return 'WebSocket'
+    case 'websocket_http_bridge': return 'WebSocket → HTTP SSE'
     case 'sse': return 'HTTP SSE'
     case 'http': return 'HTTP'
     default: return '传输未知'
