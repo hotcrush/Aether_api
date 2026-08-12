@@ -166,6 +166,12 @@ pub(super) async fn proxy_handler(
     }
 
     let route_key = request_route_key(&headers, &body);
+    if body.len() >= LARGE_REQUEST_WARNING_BYTES {
+        warn!(
+            request_bytes = body.len(),
+            route_key, "Responses 请求体超过 15 MiB，将保留完整上下文并启用大请求传输保护"
+        );
+    }
     let (accounts, retry_after, stream_fail_open) =
         state.ordered_accounts_for_request(accounts, route_key, &capability);
     if stream_fail_open {
@@ -196,8 +202,7 @@ pub(super) async fn proxy_handler(
             last_error = "upstream startup budget exhausted".to_string();
             break;
         }
-        let Some(capacity_lease) = state.capacity.try_acquire(&account.id, account.concurrency)
-        else {
+        let Some(capacity_lease) = state.try_acquire_capacity(account) else {
             last_error = "all matching upstream accounts are at capacity".to_string();
             continue;
         };
@@ -210,6 +215,7 @@ pub(super) async fn proxy_handler(
             log.finish("retry", Some(&message));
         }
         attempted_accounts += 1;
+        let attempt_started = tokio::time::Instant::now();
         let attempt_log = request_log.begin_attempt(Some(account), attempted_accounts as i64);
         let mut ready = match tokio::time::timeout_at(
             startup_deadline,
@@ -403,8 +409,12 @@ pub(super) async fn proxy_handler(
                 log.mark_response(status.as_u16());
             }
 
-            let (response, usage, completion_deferred) = match tokio::time::timeout_at(
+            let first_event_deadline = std::cmp::min(
                 startup_deadline,
+                tokio::time::Instant::now() + UPSTREAM_FIRST_EVENT_TIMEOUT,
+            );
+            let (response, usage, completion_deferred) = match tokio::time::timeout_at(
+                first_event_deadline,
                 to_client_response(
                     response,
                     ready.account_type == "oauth",
@@ -454,7 +464,11 @@ pub(super) async fn proxy_handler(
                     break;
                 }
                 Err(_) => {
-                    let error = format!("{}: upstream startup budget exhausted", ready.name);
+                    let error = format!(
+                        "{}: 上游首个响应事件等待超过 {} 秒",
+                        ready.name,
+                        UPSTREAM_FIRST_EVENT_TIMEOUT.as_secs()
+                    );
                     if let Some(log) = &attempt_log {
                         log.finish("error", Some(&error));
                     }
@@ -464,12 +478,16 @@ pub(super) async fn proxy_handler(
                     state.cool_down_account(&ready.id, Duration::from_secs(20));
                     state.unbind_route(route_key, &ready.id);
                     last_error = error;
-                    break 'accounts;
+                    break;
                 }
             };
 
             state.clear_cooldown(&ready.id, &capability);
-            state.bind_route(route_key, &ready.id);
+            if attempt_started.elapsed() <= STICKY_ROUTE_MAX_FIRST_EVENT_LATENCY {
+                state.bind_route(route_key, &ready.id);
+            } else {
+                state.unbind_route(route_key, &ready.id);
+            }
             if !image_generation::is_dedicated_account(&ready) {
                 let _ = state.db.mark_used_async(&ready.id).await;
             }
@@ -540,7 +558,7 @@ fn request_body_limit_response(limit: usize) -> Response {
     )
 }
 
-pub(super) fn hold_capacity_lease(response: Response, lease: CapacityLease) -> Response {
+pub(super) fn hold_capacity_lease(response: Response, lease: UpstreamCapacityLease) -> Response {
     let (parts, body) = response.into_parts();
     let stream = futures::stream::unfold(
         (body.into_data_stream(), lease),

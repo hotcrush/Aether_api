@@ -18,6 +18,7 @@ fn test_state() -> ProxyState {
         ))),
         app_handle: None,
         capacity: Arc::new(CapacityRegistry::default()),
+        relay_capacity: Arc::new(CapacityRegistry::default()),
         cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),
         stream_quarantines: Cache::builder().time_to_live(STREAM_QUARANTINE_TTL).build(),
         quota_snapshot_throttle: Cache::builder()
@@ -41,6 +42,56 @@ fn responses_capability(model: &str) -> RequestCapability {
         model: Some(model.to_string()),
         image_generation: false,
     }
+}
+
+#[test]
+fn oauth_normalization_removes_disabled_truncation_and_rejects_auto() {
+    let normalized = normalize_oauth_body(
+        br#"{"model":"gpt-5.6-sol","input":"hello","truncation":"disabled"}"#,
+        false,
+    )
+    .unwrap();
+    let value: Value = serde_json::from_slice(&normalized).unwrap();
+    assert!(value.get("truncation").is_none());
+
+    let error = normalize_oauth_body(
+        br#"{"model":"gpt-5.6-sol","input":"hello","truncation":"auto"}"#,
+        false,
+    )
+    .unwrap_err();
+    assert!(error.contains("truncation=auto"));
+}
+
+#[test]
+fn session_routing_is_stable_and_can_spread_across_relays() {
+    let mut first = scheduling_account("first", 1);
+    first.account_type = "api_key".to_string();
+    first.base_url = "https://relay-a.example/v1".to_string();
+    let mut second = scheduling_account("second", 1);
+    second.account_type = "api_key".to_string();
+    second.base_url = "https://relay-b.example/v1".to_string();
+
+    let mut saw_first = false;
+    let mut saw_second = false;
+    for route_key in 0..256 {
+        let mut ordered = vec![first.clone(), second.clone()];
+        order_accounts_by_session_relay(&mut ordered, route_key);
+        let first_order = ordered
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>();
+        order_accounts_by_session_relay(&mut ordered, route_key);
+        assert_eq!(
+            first_order,
+            ordered
+                .iter()
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>()
+        );
+        saw_first |= ordered[0].id == first.id;
+        saw_second |= ordered[0].id == second.id;
+    }
+    assert!(saw_first && saw_second);
 }
 
 #[test]

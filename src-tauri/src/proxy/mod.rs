@@ -56,7 +56,10 @@ const MAX_STICKY_ROUTES: u64 = 4096;
 const WEIGHTED_SCHEDULE_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_WEIGHTED_SCHEDULES: usize = 4096;
 const MAX_ACCOUNT_ATTEMPTS: usize = 3;
-const REQUEST_STARTUP_BUDGET: Duration = Duration::from_secs(30);
+const REQUEST_STARTUP_BUDGET: Duration = Duration::from_secs(75);
+const UPSTREAM_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(25);
+const STICKY_ROUTE_MAX_FIRST_EVENT_LATENCY: Duration = Duration::from_secs(15);
+const LARGE_REQUEST_WARNING_BYTES: usize = 15 * 1024 * 1024;
 const UPSTREAM_ERROR_BODY_BUDGET: Duration = Duration::from_secs(2);
 const MAX_STREAM_BOOTSTRAP_BYTES: usize = 8 * 1024 * 1024;
 const MAX_STREAM_OBSERVER_EVENT_BYTES: usize = 256 * 1024;
@@ -263,6 +266,7 @@ impl Display for SendUpstreamError {
 enum PrepareResponseError {
     Transport(String),
     Upstream(String),
+    Unauthorized(String),
 }
 
 impl PrepareResponseError {
@@ -270,6 +274,7 @@ impl PrepareResponseError {
         match self {
             Self::Transport(_) => CooldownScope::Account,
             Self::Upstream(_) => CooldownScope::Capability,
+            Self::Unauthorized(_) => CooldownScope::Account,
         }
     }
 
@@ -281,7 +286,9 @@ impl PrepareResponseError {
 impl Display for PrepareResponseError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Transport(message) | Self::Upstream(message) => formatter.write_str(message),
+            Self::Transport(message) | Self::Upstream(message) | Self::Unauthorized(message) => {
+                formatter.write_str(message)
+            }
         }
     }
 }
@@ -307,6 +314,7 @@ pub struct ProxyState {
     pub codex_version: Arc<arc_swap::ArcSwap<String>>,
     app_handle: Option<tauri::AppHandle>,
     capacity: Arc<CapacityRegistry>,
+    relay_capacity: Arc<CapacityRegistry>,
     cooldowns: Cache<CooldownKey, Instant>,
     stream_quarantines: Cache<CooldownKey, Instant>,
     quota_snapshot_throttle: Cache<String, ()>,
@@ -407,10 +415,17 @@ impl ProxyState {
         } else {
             None
         };
-        (
-            self.order_by_priority(available, sticky_id.as_deref(), capability),
-            retry_after,
-        )
+        let mut ordered = self.order_by_priority(available, None, capability);
+        if let Some(route_key) = route_key {
+            order_accounts_by_session_relay(&mut ordered, route_key);
+        }
+        if let Some(sticky_id) = sticky_id {
+            if let Some(index) = ordered.iter().position(|account| account.id == sticky_id) {
+                let sticky = ordered.remove(index);
+                ordered.insert(0, sticky);
+            }
+        }
+        (ordered, retry_after)
     }
 
     fn active_block_until(
@@ -653,6 +668,71 @@ impl ProxyState {
         locks.insert(account_id.to_string(), Arc::downgrade(&lock));
         lock
     }
+
+    fn try_acquire_capacity(&self, account: &Account) -> Option<UpstreamCapacityLease> {
+        let account_lease = self
+            .capacity
+            .try_acquire(&account.id, account.concurrency)?;
+        let relay_lease = match relay_capacity_key(account) {
+            Some(key) => match self.relay_capacity.try_acquire(&key, account.concurrency) {
+                Some(lease) => Some(lease),
+                None => return None,
+            },
+            None => None,
+        };
+        Some(UpstreamCapacityLease {
+            _account: account_lease,
+            _relay: relay_lease,
+        })
+    }
+}
+
+pub(super) struct UpstreamCapacityLease {
+    _account: CapacityLease,
+    _relay: Option<CapacityLease>,
+}
+
+fn relay_capacity_key(account: &Account) -> Option<String> {
+    if account.account_type != "api_key" || account.base_url.trim().is_empty() {
+        return None;
+    }
+    let mut url = reqwest::Url::parse(account.base_url.trim()).ok()?;
+    if url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("api.openai.com"))
+    {
+        return None;
+    }
+    let scheme = match url.scheme() {
+        "ws" => "http",
+        "wss" => "https",
+        other => other,
+    }
+    .to_string();
+    let _ = url.set_scheme(&scheme);
+    url.set_query(None);
+    url.set_fragment(None);
+    let normalized = url.as_str().trim_end_matches('/').to_ascii_lowercase();
+    Some(format!("relay:{normalized}"))
+}
+
+fn session_relay_identity(account: &Account) -> String {
+    relay_capacity_key(account).unwrap_or_else(|| format!("account:{}", account.id))
+}
+
+fn order_accounts_by_session_relay(accounts: &mut [Account], route_key: u64) {
+    accounts.sort_by(|left, right| {
+        left.priority.cmp(&right.priority).then_with(|| {
+            let left_identity = session_relay_identity(left);
+            let right_identity = session_relay_identity(right);
+            let left_score = stable_route_hash(&format!("{route_key}:{left_identity}"));
+            let right_score = stable_route_hash(&format!("{route_key}:{right_identity}"));
+            right_score
+                .cmp(&left_score)
+                .then_with(|| left_identity.cmp(&right_identity))
+                .then_with(|| left.id.cmp(&right.id))
+        })
+    });
 }
 
 pub async fn start_proxy_server(
@@ -676,6 +756,7 @@ pub async fn start_proxy_server(
         codex_version,
         app_handle: Some(app_handle),
         capacity,
+        relay_capacity: Arc::new(CapacityRegistry::default()),
         cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),
         stream_quarantines: Cache::builder().time_to_live(STREAM_QUARANTINE_TTL).build(),
         quota_snapshot_throttle: Cache::builder()

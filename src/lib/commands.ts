@@ -553,6 +553,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return { total: 2, created: 0, updated: 2, failed: 0, errors: [] } as T
     case 'test_account':
       return '连接正常，响应耗时 286ms' as T
+    case 'sync_oauth_account_models': {
+      const target = previewAccounts.find((account) => account.id === args?.id)
+      if (!target) throw new Error('账号不存在')
+      target.models = ['gpt-5.6-sol', 'gpt-5.6-luna']
+      return { ...target } as T
+    }
     case 'open_relay_site':
       return 'https://relay.example/' as T
     case 'set_account_status': {
@@ -824,7 +830,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return deleted as T
     }
     case 'get_app_version':
-      return { version: '0.1.0-alpha.16', commit: 'dev', build_time: '2026-08-10' } as T
+      return { version: '0.1.0-alpha.18', commit: 'dev', build_time: '2026-08-12' } as T
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }
@@ -854,6 +860,9 @@ export const refreshAllAccounts = () =>
 
 export const testAccount = (id: string) =>
   call<string>('test_account', { id })
+
+export const syncOAuthAccountModels = (id: string) =>
+  call<Account>('sync_oauth_account_models', { id })
 
 export const openRelaySite = (id: string) =>
   call<string>('open_relay_site', { id })

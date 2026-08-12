@@ -38,6 +38,27 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.18] - 2026-08-12
+
+### Added
+
+- 新增 OAuth Codex 模型列表同步，并在账号编辑中提供同步入口
+- 新增按会话 ID 对不同中转站进行稳定分流，单中转站容量满时自动切换候选站
+
+### Changed
+
+- WebSocket 长连接改为按每个 `response.create` 计入并释放并发容量
+- 原生 WebSocket 与 HTTP/SSE 桥接增加首个响应事件超时和慢上游路由保护
+- 同一中转站的多个 API Key 共享中转站级并发槽位，避免绕过上游单并发限制
+
+### Fixed
+
+- 修复 OAuth Responses 的 `truncation: disabled` 请求被上游拒绝，并明确提示不兼容的 `auto`
+- 修复 OAuth HTTP、HTTP/SSE 桥接和 WebSocket 握手返回 401 后未自动刷新 Token 重试
+- 修复 WebSocket 多轮请求长期占用并发槽位和上一轮未完成时覆盖响应观察器的问题
+- 修复大上下文 WebSocket 请求首包过大导致连接失败，自动使用 HTTP/SSE 桥接并保留完整上下文
+- 增加超过 15 MiB 请求体的日志告警和传输保护，不隐式删除会话历史
+
 ## [0.1.0-alpha.17] - 2026-08-12
 
 ### Added

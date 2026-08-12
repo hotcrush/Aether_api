@@ -514,6 +514,92 @@ pub(crate) async fn refresh_all_accounts(
 }
 
 #[tauri::command]
+pub(crate) async fn sync_oauth_account_models(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Account, String> {
+    let mut account = state
+        .db
+        .get_account(&id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "账号不存在".to_string())?;
+    if account.account_type != "oauth" {
+        return Err("只有 OpenAI OAuth 账号支持同步 Codex 模型".to_string());
+    }
+
+    let client = state.client.load_full();
+    let codex_version = crate::codex_identity::current_version(&state.codex_version);
+    let url = format!(
+        "https://chatgpt.com/backend-api/codex/models?client_version={}",
+        codex_version
+    );
+    let mut refreshed_after_unauthorized = false;
+    let payload = loop {
+        if account.access_token.is_empty()
+            || account
+                .expires_at
+                .is_some_and(|expires| expires <= chrono::Utc::now().timestamp() + 120)
+        {
+            let refreshed = oauth::refresh_account(&client, &account, &codex_version).await?;
+            account = state
+                .db
+                .update_oauth_tokens(&id, &refreshed)
+                .map_err(|error| format!("保存刷新结果失败: {error}"))?;
+        }
+        let mut request = crate::codex_identity::apply_identity(
+            client.get(&url).bearer_auth(&account.access_token),
+            &codex_version,
+        );
+        if !account.chatgpt_account_id.is_empty() {
+            request = request.header("chatgpt-account-id", &account.chatgpt_account_id);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|error| format!("同步模型失败: {error}"))?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && !account.refresh_token.is_empty()
+            && !refreshed_after_unauthorized
+        {
+            refreshed_after_unauthorized = true;
+            let refreshed = oauth::refresh_account(&client, &account, &codex_version).await?;
+            account = state
+                .db
+                .update_oauth_tokens(&id, &refreshed)
+                .map_err(|error| format!("保存刷新结果失败: {error}"))?;
+            continue;
+        }
+        let status = response.status();
+        let payload = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|error| format!("解析 Codex 模型列表失败: {error}"))?;
+        if !status.is_success() {
+            return Err(format!("同步模型失败 ({status}): {payload}"));
+        }
+        break payload;
+    };
+
+    let items = payload
+        .get("models")
+        .or_else(|| payload.get("data"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Codex 模型响应中没有 models/data 列表".to_string())?;
+    let models = normalize_models(items.iter().filter_map(|item| {
+        item.get("slug")
+            .or_else(|| item.get("id"))
+            .and_then(serde_json::Value::as_str)
+    }));
+    if models.is_empty() {
+        return Err("Codex 模型响应为空".to_string());
+    }
+    state
+        .db
+        .update_account_models(&id, &models)
+        .map_err(|error| format!("保存模型列表失败: {error}"))
+}
+
+#[tauri::command]
 pub(crate) async fn test_account(
     state: tauri::State<'_, AppState>,
     id: String,

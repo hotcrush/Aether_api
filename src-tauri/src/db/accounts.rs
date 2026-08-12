@@ -240,6 +240,23 @@ impl Db {
             .ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
+    pub fn update_account_models(&self, id: &str, models: &[String]) -> SqlResult<Account> {
+        let models = models_to_storage(models);
+        let conn = self.conn.lock().unwrap();
+        let updated = conn.execute(
+            "UPDATE accounts SET models = ?2, last_error = '',
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              WHERE id = ?1 AND deleted_at IS NULL",
+            rusqlite::params![id, models],
+        )?;
+        drop(conn);
+        if updated == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        self.get_account(id)?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
     pub fn delete_account(&self, id: &str) -> SqlResult<bool> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.execute(

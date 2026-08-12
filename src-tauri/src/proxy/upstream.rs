@@ -263,6 +263,21 @@ pub(super) fn normalize_oauth_body(body: &[u8], compact: bool) -> Result<Vec<u8>
     ] {
         object.remove(key);
     }
+    match object.get("truncation").and_then(Value::as_str) {
+        Some("disabled") => {
+            object.remove("truncation");
+        }
+        Some("auto") => {
+            return Err(
+                "OAuth Responses 不支持 truncation=auto，请删除该字段或改用 truncation=disabled"
+                    .to_string(),
+            );
+        }
+        Some(other) => {
+            return Err(format!("不支持的 truncation 值: {other}"));
+        }
+        None => {}
+    }
     if !compact
         && object
             .get("instructions")
@@ -324,7 +339,7 @@ pub(super) fn sanitize_responses_tool_parameter_types(body: &[u8]) -> (Vec<u8>, 
     }
 }
 
-fn sanitize_responses_tool_parameter_types_in_object(
+pub(super) fn sanitize_responses_tool_parameter_types_in_object(
     object: &mut serde_json::Map<String, Value>,
 ) -> bool {
     let mut changed = object

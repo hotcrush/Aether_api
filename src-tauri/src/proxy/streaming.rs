@@ -253,6 +253,14 @@ impl StreamBodyObserver {
         );
     }
 
+    pub(super) fn record_client_cancelled(&mut self) {
+        if self.failure_recorded {
+            return;
+        }
+        self.failure_recorded = true;
+        self.context.record_cancelled();
+    }
+
     pub(super) fn record_eof(&mut self) {
         if self.sse
             && self.context.capability.endpoint == EndpointFamily::Responses

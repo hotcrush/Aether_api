@@ -246,6 +246,7 @@ pub(crate) fn run() {
             super::clipboard::import_accounts,
             super::accounts::refresh_account,
             super::accounts::refresh_all_accounts,
+            super::accounts::sync_oauth_account_models,
             super::logs::list_request_logs,
             super::logs::clear_request_logs,
             crate::channel_monitor::get_channel_monitor_snapshot,

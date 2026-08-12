@@ -12,6 +12,8 @@ use tokio_tungstenite::{client_async_tls_with_config, MaybeTlsStream, WebSocketS
 const RESPONSES_WEBSOCKETS_BETA: &str = "responses_websockets=2026-02-06";
 const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const FIRST_WEBSOCKET_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const HTTP_BRIDGE_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+const WEBSOCKET_HTTP_BRIDGE_THRESHOLD_BYTES: usize = 15 * 1024 * 1024;
 const MAX_WEBSOCKET_START_ATTEMPTS: usize = 2;
 
 trait WebSocketIo: AsyncRead + AsyncWrite {}
@@ -39,7 +41,7 @@ enum ConnectedTransport {
 
 struct ConnectedWebSocket {
     account: Account,
-    _capacity_lease: CapacityLease,
+    capacity_lease: UpstreamCapacityLease,
     transport: ConnectedTransport,
     observer: StreamBodyObserver,
     route_key: Option<u64>,
@@ -98,7 +100,7 @@ async fn run_websocket_proxy(
         let connected = connect_selected_upstream(&state, &uri, &headers, &first_request).await?;
         let ConnectedWebSocket {
             account,
-            _capacity_lease,
+            capacity_lease,
             transport,
             observer,
             route_key,
@@ -117,6 +119,7 @@ async fn run_websocket_proxy(
                     route_key,
                     first_message,
                     observer,
+                    capacity_lease,
                 )
                 .await
             }
@@ -130,6 +133,7 @@ async fn run_websocket_proxy(
                     route_key,
                     prepared,
                     observer,
+                    capacity_lease,
                 )
                 .await
             }
@@ -166,7 +170,7 @@ async fn receive_first_websocket_request(client: &mut WebSocket) -> Result<Strin
 }
 
 fn normalize_websocket_request(text: &str, allow_cancel: bool) -> Result<String, String> {
-    let value: Value = serde_json::from_str(text)
+    let mut value: Value = serde_json::from_str(text)
         .map_err(|error| format!("Codex WebSocket 请求不是有效 JSON: {error}"))?;
     let message_type = value.get("type").and_then(Value::as_str);
     if message_type == Some("response.cancel") && allow_cancel {
@@ -175,8 +179,33 @@ fn normalize_websocket_request(text: &str, allow_cancel: bool) -> Result<String,
     if message_type != Some("response.create") {
         return Err("Codex WebSocket 请求类型必须是 response.create".to_string());
     }
-    let normalized = sanitize_responses_tool_parameter_types(text.as_bytes()).0;
-    String::from_utf8(normalized).map_err(|_| "Codex WebSocket 请求不是有效 UTF-8 文本".to_string())
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "response.create 必须是 JSON 对象".to_string())?;
+    sanitize_responses_tool_parameter_types_in_object(object);
+    serde_json::to_string(&value).map_err(|error| format!("序列化 WebSocket 请求失败: {error}"))
+}
+
+fn normalize_oauth_websocket_request(text: &str) -> Result<String, String> {
+    let mut value: Value = serde_json::from_str(text)
+        .map_err(|error| format!("Codex WebSocket 请求不是有效 JSON: {error}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "response.create 必须是 JSON 对象".to_string())?;
+    match object.get("truncation").and_then(Value::as_str) {
+        Some("disabled") => {
+            object.remove("truncation");
+        }
+        Some("auto") => {
+            return Err(
+                "OAuth Responses 不支持 truncation=auto，请删除该字段或改用 truncation=disabled"
+                    .to_string(),
+            );
+        }
+        Some(other) => return Err(format!("不支持的 truncation 值: {other}")),
+        None => {}
+    }
+    serde_json::to_string(&value).map_err(|error| format!("序列化 WebSocket 请求失败: {error}"))
 }
 
 async fn connect_selected_upstream(
@@ -209,6 +238,13 @@ async fn connect_selected_upstream(
     }
 
     let route_key = request_route_key(inbound_headers, first_request.as_bytes());
+    if first_request.len() >= LARGE_REQUEST_WARNING_BYTES {
+        warn!(
+            request_bytes = first_request.len(),
+            route_key,
+            "WebSocket response.create 超过 15 MiB，将通过 HTTP SSE 桥接并保留完整上下文"
+        );
+    }
     let (accounts, _, _) = state.ordered_accounts_for_request(accounts, route_key, &capability);
     let startup_deadline = tokio::time::Instant::now() + REQUEST_STARTUP_BUDGET;
     let outbound_proxy = crate::outbound_proxy::load(&state.db);
@@ -219,8 +255,7 @@ async fn connect_selected_upstream(
         if attempts >= MAX_ACCOUNT_ATTEMPTS || tokio::time::Instant::now() >= startup_deadline {
             break;
         }
-        let Some(capacity_lease) = state.capacity.try_acquire(&account.id, account.concurrency)
-        else {
+        let Some(capacity_lease) = state.try_acquire_capacity(&account) else {
             last_error = "所有匹配账号均已达到并发上限".to_string();
             continue;
         };
@@ -230,7 +265,8 @@ async fn connect_selected_upstream(
         }
 
         attempts += 1;
-        let use_http_bridge = should_use_http_bridge(&account);
+        let attempt_started = tokio::time::Instant::now();
+        let use_http_bridge = should_use_http_bridge(&account, first_request.len());
         let attempt_request_log = request_log.with_transport(
             if use_http_bridge {
                 "websocket_http_bridge"
@@ -240,7 +276,7 @@ async fn connect_selected_upstream(
             !use_http_bridge,
         );
         let attempt_log = attempt_request_log.begin_attempt(Some(&account), attempts as i64);
-        let ready = match tokio::time::timeout_at(
+        let mut ready = match tokio::time::timeout_at(
             startup_deadline,
             ensure_account_ready(state, &account, false),
         )
@@ -261,8 +297,8 @@ async fn connect_selected_upstream(
         };
 
         if use_http_bridge {
-            let prepared = tokio::time::timeout_at(
-                startup_deadline,
+            let prepared = tokio::time::timeout(
+                HTTP_BRIDGE_STARTUP_TIMEOUT,
                 prepare_http_bridge_turn(state, &ready, uri, inbound_headers, first_request),
             )
             .await;
@@ -289,7 +325,10 @@ async fn connect_selected_upstream(
                     continue;
                 }
                 Err(_) => {
-                    let message = format!("{}: HTTP SSE 上游连接超时", ready.name);
+                    let message = format!(
+                        "{}: HTTP SSE 上游连接或首事件等待超时（120 秒）",
+                        ready.name
+                    );
                     if let Some(log) = &attempt_log {
                         log.finish("retry", Some(&message));
                     }
@@ -304,7 +343,11 @@ async fn connect_selected_upstream(
             }
             persist_codex_quota_headers(state, &ready, &prepared.response_headers, false);
             state.clear_cooldown(&ready.id, &capability);
-            state.bind_route(route_key, &ready.id);
+            if attempt_started.elapsed() <= STICKY_ROUTE_MAX_FIRST_EVENT_LATENCY {
+                state.bind_route(route_key, &ready.id);
+            } else {
+                state.unbind_route(route_key, &ready.id);
+            }
             if !image_generation::is_dedicated_account(&ready) {
                 let _ = state.db.mark_used_async(&ready.id).await;
             }
@@ -321,7 +364,7 @@ async fn connect_selected_upstream(
             );
             return Ok(ConnectedWebSocket {
                 account: ready,
-                _capacity_lease: capacity_lease,
+                capacity_lease,
                 transport: ConnectedTransport::HttpBridge(prepared),
                 observer,
                 route_key,
@@ -329,11 +372,17 @@ async fn connect_selected_upstream(
         }
 
         let codex_version = crate::codex_identity::current_version(&state.codex_version);
+        let first_request = if ready.account_type == "oauth" {
+            normalize_oauth_websocket_request(first_request)?
+        } else {
+            first_request.to_string()
+        };
         let mut socket = None;
         let mut first_message = None;
         let mut response_headers = HeaderMap::new();
         let mut start_error: Option<PrepareResponseError> = None;
         let mut upstream_upgraded = false;
+        let mut refreshed_after_unauthorized = false;
         for start_attempt in 1..=MAX_WEBSOCKET_START_ATTEMPTS {
             let connected = tokio::time::timeout_at(
                 startup_deadline,
@@ -351,8 +400,38 @@ async fn connect_selected_upstream(
                     upstream_upgraded = true;
                     connected
                 }
+                Ok(Err(PrepareResponseError::Unauthorized(error)))
+                    if ready.account_type == "oauth"
+                        && !ready.refresh_token.is_empty()
+                        && !refreshed_after_unauthorized =>
+                {
+                    refreshed_after_unauthorized = true;
+                    match tokio::time::timeout_at(
+                        startup_deadline,
+                        ensure_account_ready(state, &ready, true),
+                    )
+                    .await
+                    {
+                        Ok(Ok(refreshed)) => {
+                            ready = refreshed;
+                            continue;
+                        }
+                        Ok(Err(refresh_error)) => {
+                            start_error = Some(PrepareResponseError::Unauthorized(format!(
+                                "{error}; OAuth Token 刷新失败: {refresh_error}"
+                            )));
+                            break;
+                        }
+                        Err(_) => {
+                            start_error = Some(PrepareResponseError::Unauthorized(
+                                "OAuth Token 刷新超时".to_string(),
+                            ));
+                            break;
+                        }
+                    }
+                }
                 Ok(Err(error)) => {
-                    start_error = Some(PrepareResponseError::Transport(error));
+                    start_error = Some(error);
                     if start_attempt < MAX_WEBSOCKET_START_ATTEMPTS
                         && tokio::time::Instant::now() < startup_deadline
                     {
@@ -369,7 +448,7 @@ async fn connect_selected_upstream(
             };
             let first_frame = tokio::time::timeout_at(
                 startup_deadline,
-                candidate.send(UpstreamMessage::Text(first_request.to_owned().into())),
+                candidate.send(UpstreamMessage::Text(first_request.clone().into())),
             )
             .await;
             if let Some(error) = match first_frame {
@@ -391,7 +470,12 @@ async fn connect_selected_upstream(
                 }
                 break;
             }
-            let message = match read_websocket_bootstrap(&mut candidate, startup_deadline).await {
+            let first_event_deadline = std::cmp::min(
+                startup_deadline,
+                tokio::time::Instant::now() + UPSTREAM_FIRST_EVENT_TIMEOUT,
+            );
+            let message = match read_websocket_bootstrap(&mut candidate, first_event_deadline).await
+            {
                 Ok(message) => message,
                 Err(error) => {
                     let retry_transport = matches!(error, PrepareResponseError::Transport(_))
@@ -458,7 +542,11 @@ async fn connect_selected_upstream(
         }
         persist_codex_quota_headers(state, &ready, &response_headers, false);
         state.clear_cooldown(&ready.id, &capability);
-        state.bind_route(route_key, &ready.id);
+        if attempt_started.elapsed() <= STICKY_ROUTE_MAX_FIRST_EVENT_LATENCY {
+            state.bind_route(route_key, &ready.id);
+        } else {
+            state.unbind_route(route_key, &ready.id);
+        }
         if !image_generation::is_dedicated_account(&ready) {
             let _ = state.db.mark_used_async(&ready.id).await;
         }
@@ -475,7 +563,7 @@ async fn connect_selected_upstream(
         );
         return Ok(ConnectedWebSocket {
             account: ready,
-            _capacity_lease: capacity_lease,
+            capacity_lease,
             transport: ConnectedTransport::WebSocket {
                 socket,
                 first_message,
@@ -488,20 +576,27 @@ async fn connect_selected_upstream(
     Err(last_error)
 }
 
-fn should_use_http_bridge(account: &Account) -> bool {
+fn should_use_http_bridge(account: &Account, request_bytes: usize) -> bool {
+    let base_url = account.base_url.trim();
+    let parsed_url = reqwest::Url::parse(base_url).ok();
+    if parsed_url
+        .as_ref()
+        .is_some_and(|url| matches!(url.scheme(), "ws" | "wss"))
+    {
+        return false;
+    }
+    if request_bytes >= WEBSOCKET_HTTP_BRIDGE_THRESHOLD_BYTES {
+        return true;
+    }
     if account.account_type == "oauth" {
         return false;
     }
-    let base_url = account.base_url.trim();
     if base_url.is_empty() {
         return false;
     }
-    let Ok(url) = reqwest::Url::parse(base_url) else {
+    let Some(url) = parsed_url else {
         return true;
     };
-    if matches!(url.scheme(), "ws" | "wss") {
-        return false;
-    }
     !url.host_str()
         .is_some_and(|host| host.eq_ignore_ascii_case("api.openai.com"))
 }
@@ -534,23 +629,43 @@ async fn prepare_http_bridge_turn(
     );
     let codex_version = crate::codex_identity::current_version(&state.codex_version);
     let client = state.client.load_full();
-    let response = send_upstream(
-        client.as_ref(),
-        account,
-        &Method::POST,
-        uri,
-        &headers,
-        &body,
-        &codex_version,
-    )
-    .await
-    .map_err(|error| PrepareResponseError::Transport(error.to_string()))?;
+    let mut ready = account.clone();
+    let mut refreshed_after_unauthorized = false;
+    let response = loop {
+        let response = send_upstream(
+            client.as_ref(),
+            &ready,
+            &Method::POST,
+            uri,
+            &headers,
+            &body,
+            &codex_version,
+        )
+        .await
+        .map_err(|error| PrepareResponseError::Transport(error.to_string()))?;
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED
+            && ready.account_type == "oauth"
+            && !ready.refresh_token.is_empty()
+            && !refreshed_after_unauthorized
+        {
+            refreshed_after_unauthorized = true;
+            ready = ensure_account_ready(state, &ready, true)
+                .await
+                .map_err(PrepareResponseError::Unauthorized)?;
+            continue;
+        }
+        if !status.is_success() {
+            let summary = upstream_error_summary(response).await;
+            return Err(if status == StatusCode::UNAUTHORIZED {
+                PrepareResponseError::Unauthorized(summary)
+            } else {
+                PrepareResponseError::Upstream(summary)
+            });
+        }
+        break response;
+    };
     let status = response.status();
-    if !status.is_success() {
-        return Err(PrepareResponseError::Upstream(
-            upstream_error_summary(response).await,
-        ));
-    }
     let response_headers = response.headers().clone();
     let mut stream: UpstreamHttpStream = Box::pin(response.bytes_stream());
     let bootstrap = read_stream_bootstrap(stream.as_mut(), true).await?;
@@ -568,16 +683,19 @@ async fn connect_upstream_websocket(
     inbound_headers: &HeaderMap,
     codex_version: &str,
     outbound_proxy: &crate::outbound_proxy::OutboundProxySettings,
-) -> Result<(UpstreamWebSocket, HeaderMap), String> {
-    let target = websocket_target_url(account, uri, codex_version)?;
+) -> Result<(UpstreamWebSocket, HeaderMap), PrepareResponseError> {
+    let target = websocket_target_url(account, uri, codex_version)
+        .map_err(PrepareResponseError::Transport)?;
     let request =
-        websocket_upstream_request(target.as_str(), account, inbound_headers, codex_version)?;
+        websocket_upstream_request(target.as_str(), account, inbound_headers, codex_version)
+            .map_err(PrepareResponseError::Transport)?;
     let stream = tokio::time::timeout(
         WEBSOCKET_CONNECT_TIMEOUT,
         connect_websocket_transport(&target, outbound_proxy),
     )
     .await
-    .map_err(|_| "连接 WebSocket 出站代理超时".to_string())??;
+    .map_err(|_| PrepareResponseError::Transport("连接 WebSocket 出站代理超时".to_string()))?
+    .map_err(PrepareResponseError::Transport)?;
     let (socket, response) = client_async_tls_with_config(request, stream, None, None)
         .await
         .map_err(websocket_connect_error)?;
@@ -854,12 +972,17 @@ fn host_port(host: &str, port: u16) -> String {
     }
 }
 
-fn websocket_connect_error(error: tokio_tungstenite::tungstenite::Error) -> String {
+fn websocket_connect_error(error: tokio_tungstenite::tungstenite::Error) -> PrepareResponseError {
     match error {
         tokio_tungstenite::tungstenite::Error::Http(response) => {
-            format!("WebSocket 上游握手失败: {}", response.status())
+            let message = format!("WebSocket 上游握手失败: {}", response.status());
+            if response.status() == StatusCode::UNAUTHORIZED {
+                PrepareResponseError::Unauthorized(message)
+            } else {
+                PrepareResponseError::Upstream(message)
+            }
         }
-        error => format!("WebSocket 上游连接失败: {error}"),
+        error => PrepareResponseError::Transport(format!("WebSocket 上游连接失败: {error}")),
     }
 }
 
@@ -880,12 +1003,15 @@ async fn relay_http_bridge(
     route_key: Option<u64>,
     mut prepared: PreparedHttpBridgeTurn,
     mut observer: StreamBodyObserver,
+    first_capacity_lease: UpstreamCapacityLease,
 ) -> Result<(), String> {
+    let mut capacity_lease = Some(first_capacity_lease);
     loop {
         match relay_http_bridge_turn(client, &mut prepared, &mut observer).await? {
             HttpBridgeTurnEnd::ClientClosed | HttpBridgeTurnEnd::UpstreamFailed => return Ok(()),
             HttpBridgeTurnEnd::Completed | HttpBridgeTurnEnd::Cancelled => {}
         }
+        capacity_lease.take();
 
         let Some(next_request) = receive_next_http_bridge_request(client).await? else {
             return Ok(());
@@ -901,15 +1027,28 @@ async fn relay_http_bridge(
             .map_err(|error| format!("发送 WebSocket 模型错误失败: {error}"))?;
             return Ok(());
         }
+        let Some(next_capacity_lease) = state.try_acquire_capacity(account) else {
+            send_websocket_error(
+                client,
+                StatusCode::TOO_MANY_REQUESTS,
+                "当前中转站正在处理其他会话，请稍后重试",
+            )
+            .await
+            .map_err(|error| format!("发送 WebSocket 容量错误失败: {error}"))?;
+            continue;
+        };
         let request_log =
             ProxyRequestLogContext::new(state, &Method::POST, uri, &capability, true, "websocket")
                 .with_transport("websocket_http_bridge", false);
         let attempt_log = request_log.begin_attempt(Some(account), 1);
-        let next_prepared =
-            prepare_http_bridge_turn(state, account, uri, inbound_headers, &next_request).await;
+        let next_prepared = tokio::time::timeout(
+            HTTP_BRIDGE_STARTUP_TIMEOUT,
+            prepare_http_bridge_turn(state, account, uri, inbound_headers, &next_request),
+        )
+        .await;
         prepared = match next_prepared {
-            Ok(prepared) => prepared,
-            Err(error) => {
+            Ok(Ok(prepared)) => prepared,
+            Ok(Err(error)) => {
                 let message = format!("{}: {error}", account.name);
                 if let Some(log) = &attempt_log {
                     log.finish("error", Some(&message));
@@ -926,6 +1065,20 @@ async fn relay_http_bridge(
                 send_websocket_error(client, StatusCode::BAD_GATEWAY, &message)
                     .await
                     .map_err(|send_error| format!("发送 HTTP SSE 桥接错误失败: {send_error}"))?;
+                return Ok(());
+            }
+            Err(_) => {
+                let message = format!(
+                    "{}: HTTP SSE 上游连接或首事件等待超时（120 秒）",
+                    account.name
+                );
+                if let Some(log) = &attempt_log {
+                    log.finish("error", Some(&message));
+                }
+                state.unbind_route(route_key, &account.id);
+                send_websocket_error(client, StatusCode::GATEWAY_TIMEOUT, &message)
+                    .await
+                    .map_err(|send_error| format!("发送 HTTP SSE 桥接超时失败: {send_error}"))?;
                 return Ok(());
             }
         };
@@ -946,6 +1099,7 @@ async fn relay_http_bridge(
             },
             true,
         );
+        capacity_lease = Some(next_capacity_lease);
     }
 }
 
@@ -1094,8 +1248,11 @@ async fn relay_websockets(
     route_key: Option<u64>,
     first_message: UpstreamMessage,
     first_observer: StreamBodyObserver,
+    first_capacity_lease: UpstreamCapacityLease,
 ) -> Result<(), String> {
     let mut observer = Some(first_observer);
+    let mut capacity_lease = Some(first_capacity_lease);
+    let mut first_event_deadline = None;
     match first_message {
         UpstreamMessage::Text(text) => {
             let terminal = stream_has_terminal_event(text.as_bytes());
@@ -1108,6 +1265,7 @@ async fn relay_websockets(
                 .map_err(|error| format!("向 Codex 转发 WebSocket 首个事件失败: {error}"))?;
             if terminal {
                 observer = None;
+                capacity_lease.take();
             }
         }
         UpstreamMessage::Binary(data) => {
@@ -1134,11 +1292,33 @@ async fn relay_websockets(
                         let value: Value = serde_json::from_str(text.as_str())
                             .map_err(|error| format!("Codex WebSocket 请求不是有效 JSON: {error}"))?;
                         let message_type = value.get("type").and_then(Value::as_str);
-                        let text = normalize_websocket_request(text.as_str(), true)?;
+                        let mut text = normalize_websocket_request(text.as_str(), true)?;
+                        if account.account_type == "oauth"
+                            && message_type == Some("response.create")
+                        {
+                            text = normalize_oauth_websocket_request(&text)?;
+                        }
                         if message_type == Some("response.create") {
-                            if let Some(previous) = observer.as_mut() {
-                                previous.record_transport_failure("新的 response.create 在上一响应完成前到达");
+                            if observer.is_some() {
+                                send_websocket_error(
+                                    client,
+                                    StatusCode::CONFLICT,
+                                    "上一轮响应尚未完成，不能开始新的 response.create",
+                                )
+                                .await
+                                .map_err(|error| format!("发送 WebSocket 并发轮次错误失败: {error}"))?;
+                                continue;
                             }
+                            let Some(next_capacity_lease) = state.try_acquire_capacity(account) else {
+                                send_websocket_error(
+                                    client,
+                                    StatusCode::TOO_MANY_REQUESTS,
+                                    "当前中转站正在处理其他会话，请稍后重试",
+                                )
+                                .await
+                                .map_err(|error| format!("发送 WebSocket 容量错误失败: {error}"))?;
+                                continue;
+                            };
                             observer = Some(new_websocket_observer(
                                 state,
                                 uri,
@@ -1146,9 +1326,21 @@ async fn relay_websockets(
                                 route_key,
                                 text.as_bytes(),
                             ));
+                            capacity_lease = Some(next_capacity_lease);
+                            first_event_deadline = Some(
+                                tokio::time::Instant::now() + UPSTREAM_FIRST_EVENT_TIMEOUT,
+                            );
                         }
                         upstream.send(UpstreamMessage::Text(text.into())).await
                             .map_err(|error| format!("转发 Codex WebSocket 请求失败: {error}"))?;
+                        if message_type == Some("response.cancel") {
+                            if let Some(active) = observer.as_mut() {
+                                active.record_client_cancelled();
+                            }
+                            observer = None;
+                            capacity_lease.take();
+                            first_event_deadline = None;
+                        }
                     }
                     ClientMessage::Binary(data) => {
                         upstream.send(UpstreamMessage::Binary(data)).await
@@ -1175,6 +1367,7 @@ async fn relay_websockets(
                     .map_err(|error| format!("读取上游 WebSocket 失败: {error}"))?;
                 match upstream_message {
                     UpstreamMessage::Text(text) => {
+                        first_event_deadline = None;
                         let terminal = stream_has_terminal_event(text.as_bytes());
                         let failed = stream_payload_error(text.as_bytes()).is_some();
                         if let Some(active) = observer.as_mut() {
@@ -1184,9 +1377,11 @@ async fn relay_websockets(
                             .map_err(|error| format!("向 Codex 转发 WebSocket 事件失败: {error}"))?;
                         if terminal || failed {
                             observer = None;
+                            capacity_lease.take();
                         }
                     }
                     UpstreamMessage::Binary(data) => {
+                        first_event_deadline = None;
                         client.send(ClientMessage::Binary(data)).await
                             .map_err(|error| format!("向 Codex 转发 WebSocket 二进制帧失败: {error}"))?;
                     }
@@ -1209,6 +1404,26 @@ async fn relay_websockets(
                         return Ok(());
                     }
                 }
+            }
+            _ = async {
+                if let Some(deadline) = first_event_deadline {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                if let Some(active) = observer.as_mut() {
+                    active.record_transport_failure("上游 WebSocket 首个响应事件等待超时");
+                }
+                capacity_lease.take();
+                send_websocket_error(
+                    client,
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "上游 WebSocket 首个响应事件等待超时，请重试当前会话",
+                )
+                .await
+                .map_err(|error| format!("发送 WebSocket 首事件超时失败: {error}"))?;
+                return Ok(());
             }
         }
     }
@@ -1327,13 +1542,37 @@ mod tests {
         let mut relay = scheduling_account_for_websocket_test("relay");
         relay.account_type = "api_key".to_string();
         relay.base_url = "https://relay.example/v1".to_string();
-        assert!(should_use_http_bridge(&relay));
+        assert!(should_use_http_bridge(&relay, 128));
 
         relay.base_url = "https://api.openai.com/v1".to_string();
-        assert!(!should_use_http_bridge(&relay));
+        assert!(!should_use_http_bridge(&relay, 128));
 
         relay.base_url = "wss://relay.example/v1".to_string();
-        assert!(!should_use_http_bridge(&relay));
+        assert!(!should_use_http_bridge(
+            &relay,
+            WEBSOCKET_HTTP_BRIDGE_THRESHOLD_BYTES
+        ));
+    }
+
+    #[test]
+    fn bridges_large_official_websocket_requests_over_http() {
+        let oauth = scheduling_account_for_websocket_test("oauth");
+        assert!(!should_use_http_bridge(
+            &oauth,
+            WEBSOCKET_HTTP_BRIDGE_THRESHOLD_BYTES - 1
+        ));
+        assert!(should_use_http_bridge(
+            &oauth,
+            WEBSOCKET_HTTP_BRIDGE_THRESHOLD_BYTES
+        ));
+
+        let mut openai = scheduling_account_for_websocket_test("openai");
+        openai.account_type = "api_key".to_string();
+        openai.base_url = "https://api.openai.com/v1".to_string();
+        assert!(should_use_http_bridge(
+            &openai,
+            WEBSOCKET_HTTP_BRIDGE_THRESHOLD_BYTES
+        ));
     }
 
     #[test]

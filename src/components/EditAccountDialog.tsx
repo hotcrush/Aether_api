@@ -1,6 +1,6 @@
 import { Info, RefreshCw, Save } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { updateAccount } from '../lib/commands'
+import { syncOAuthAccountModels, updateAccount } from '../lib/commands'
 import { errorText } from '../lib/format'
 import type { Account } from '../types'
 import { Dialog } from './Dialog'
@@ -70,6 +70,21 @@ export function EditAccountDialog({ account, onClose, onSaved, notify }: EditAcc
     }
   }
 
+  const syncModels = async () => {
+    if (!account) return
+    setBusy(true)
+    try {
+      const updated = await syncOAuthAccountModels(account.id)
+      setModels(updated.models.join(', '))
+      await onSaved()
+      notify(`已同步 ${updated.models.length} 个 Codex 模型`)
+    } catch (error) {
+      notify(errorText(error), true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const relay = account?.account_type === 'api_key'
   return (
     <Dialog
@@ -118,6 +133,18 @@ export function EditAccountDialog({ account, onClose, onSaved, notify }: EditAcc
             />
           </div>
         </>
+      )}
+      {account?.account_type === 'oauth' && (
+        <div className="field">
+          <label htmlFor="editOauthModels">Codex 模型</label>
+          <div className="field-row">
+            <input id="editOauthModels" value={models} readOnly placeholder="尚未同步" />
+            <button className="btn" type="button" onClick={() => void syncModels()} disabled={busy}>
+              <RefreshCw className={busy ? 'spin' : undefined} size={16} />
+              同步
+            </button>
+          </div>
+        </div>
       )}
       <div className="field-row">
         <div className="field">
