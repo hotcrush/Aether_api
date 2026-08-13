@@ -196,6 +196,53 @@ fn is_allowed_external_url(url: &tauri::Url) -> bool {
         && url.password().is_none()
 }
 
+fn needs_ldxp_request_header(url: &tauri::Url) -> bool {
+    matches!(url.host_str(), Some("pay.ldxp.cn" | "www.ldxp.cn"))
+}
+
+#[cfg(windows)]
+fn install_ldxp_request_header<R: Runtime>(webview: &Webview<R>) -> Result<(), String> {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+        WebResourceRequestedEventHandler,
+    };
+    use windows::core::{w, HSTRING};
+
+    let label = webview.label().to_string();
+    webview
+        .with_webview(move |platform| {
+            let result: webview2_com::Result<()> = (|| unsafe {
+                let core = platform.controller().CoreWebView2()?;
+                for pattern in ["https://pay.ldxp.cn/*", "https://www.ldxp.cn/*"] {
+                    core.AddWebResourceRequestedFilter(
+                        &HSTRING::from(pattern),
+                        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                    )?;
+                }
+                let handler = WebResourceRequestedEventHandler::create(Box::new(|_, args| {
+                    if let Some(args) = args {
+                        args.Request()?
+                            .Headers()?
+                            .SetHeader(w!("X-Real-IP"), w!("127.0.0.1"))?;
+                    }
+                    Ok(())
+                }));
+                let mut token = 0;
+                core.add_WebResourceRequested(&handler, &mut token)?;
+                Ok(())
+            })();
+            if let Err(error) = result {
+                tracing::warn!(webview = %label, %error, "安装 ldxp WebView 请求头兼容层失败");
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(windows))]
+fn install_ldxp_request_header<R: Runtime>(_webview: &Webview<R>) -> Result<(), String> {
+    Ok(())
+}
+
 fn safe_origin(url: &tauri::Url) -> Option<String> {
     is_allowed_external_url(url).then(|| url.origin().ascii_serialization())
 }
@@ -536,11 +583,22 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
     let new_tab_source_tab_id = request.tab_id.clone();
     let download_directory = workspace_download_dir(&app)?;
     let download_tracker = Arc::new(Mutex::new(DownloadTracker::default()));
-    let mut builder = WebviewBuilder::new(webview_label.clone(), WebviewUrl::External(url))
+    // Start affected pages on about:blank so the WebView2 request hook is
+    // installed before the first HTTPS navigation. Otherwise the initial
+    // document can race ahead and receive ESA's 520 response.
+    let delayed_navigation = needs_ldxp_request_header(&url);
+    let initial_url = if delayed_navigation {
+        "about:blank"
+            .parse::<tauri::Url>()
+            .expect("about:blank is a valid WebView URL")
+    } else {
+        url.clone()
+    };
+    let mut builder = WebviewBuilder::new(webview_label.clone(), WebviewUrl::External(initial_url))
         .focused(false)
         .devtools(cfg!(debug_assertions))
         .initialization_script_for_all_frames(copy_initialization_script(&copy_proof))
-        .on_navigation(is_allowed_external_url)
+        .on_navigation(|url| url.as_str() == "about:blank" || is_allowed_external_url(url))
         .on_new_window(move |url, _| {
             // Do not let WebView2 create an unmanaged native popup. In
             // particular, allowing about:blank creates a full-window popup
@@ -623,6 +681,10 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
             LogicalSize::new(bounds.width, bounds.height),
         )
         .map_err(|error| error.to_string())?;
+    install_ldxp_request_header(&webview)?;
+    if delayed_navigation {
+        webview.navigate(url).map_err(|error| error.to_string())?;
+    }
 
     registry(&state)?.insert(
         request.tab_id.clone(),
@@ -818,6 +880,24 @@ pub(crate) fn reload_workspace_webview<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ldxp_header_workaround_is_domain_scoped() {
+        assert!(needs_ldxp_request_header(
+            &"https://pay.ldxp.cn/".parse().unwrap()
+        ));
+        assert!(needs_ldxp_request_header(
+            &"https://www.ldxp.cn/shopApi/Shop/info".parse().unwrap()
+        ));
+        assert!(!needs_ldxp_request_header(
+            &"https://example.com/?next=https://pay.ldxp.cn"
+                .parse()
+                .unwrap()
+        ));
+        assert!(!needs_ldxp_request_header(
+            &"https://pay.ldxp.cn.evil.example/".parse().unwrap()
+        ));
+    }
 
     #[test]
     fn sanitizes_windows_download_names() {

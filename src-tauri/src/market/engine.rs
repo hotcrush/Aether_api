@@ -685,6 +685,11 @@ impl MarketState {
             );
             headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
             headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"));
+            // ldxp's ESA route currently returns 520 when this header is
+            // absent, even though the value itself is not validated. Keep
+            // the workaround scoped to the ldxp client instead of changing
+            // headers for unrelated outbound requests.
+            headers.insert("x-real-ip", HeaderValue::from_static("127.0.0.1"));
             if let Ok(value) = HeaderValue::from_str(&base) {
                 headers.insert(ORIGIN, value);
             }
