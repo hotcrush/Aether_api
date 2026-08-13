@@ -34,7 +34,7 @@ struct PreparedHttpBridgeTurn {
 enum ConnectedTransport {
     WebSocket {
         socket: UpstreamWebSocket,
-        first_message: UpstreamMessage,
+        first_messages: Vec<UpstreamMessage>,
     },
     HttpBridge(PreparedHttpBridgeTurn),
 }
@@ -108,16 +108,17 @@ async fn run_websocket_proxy(
         match transport {
             ConnectedTransport::WebSocket {
                 mut socket,
-                first_message,
+                first_messages,
             } => {
                 relay_websockets(
                     &mut client,
                     &mut socket,
                     &state,
                     &uri,
+                    &headers,
                     &account,
                     route_key,
-                    first_message,
+                    first_messages,
                     observer,
                     capacity_lease,
                 )
@@ -377,8 +378,17 @@ async fn connect_selected_upstream(
         } else {
             first_request.to_string()
         };
+        let prepared_fingerprint = crate::codex_fingerprint::prepare(
+            &ready,
+            state.codex_fingerprint.load().mode,
+            inbound_headers,
+            first_request.as_bytes(),
+        );
+        let upstream_headers = prepared_fingerprint.headers;
+        let first_request = String::from_utf8(prepared_fingerprint.body)
+            .map_err(|error| format!("序列化 Codex 指纹请求失败: {error}"))?;
         let mut socket = None;
-        let mut first_message = None;
+        let mut first_messages = None;
         let mut response_headers = HeaderMap::new();
         let mut start_error: Option<PrepareResponseError> = None;
         let mut upstream_upgraded = false;
@@ -389,7 +399,7 @@ async fn connect_selected_upstream(
                 connect_upstream_websocket(
                     &ready,
                     uri,
-                    inbound_headers,
+                    &upstream_headers,
                     &codex_version,
                     &outbound_proxy,
                 ),
@@ -497,13 +507,14 @@ async fn connect_selected_upstream(
                 }
             };
             socket = Some(candidate);
-            first_message = Some(message);
+            first_messages = Some(message);
             response_headers = candidate_headers;
             start_error = None;
             break;
         }
-        let (socket, first_message, response_headers) = match (socket, first_message, start_error) {
-            (Some(socket), Some(first_message), _) => (socket, first_message, response_headers),
+        let (socket, first_messages, response_headers) = match (socket, first_messages, start_error)
+        {
+            (Some(socket), Some(first_messages), _) => (socket, first_messages, response_headers),
             (None, None, Some(error)) => {
                 let message = format!("{}: {error}", ready.name);
                 if let Some(log) = &attempt_log {
@@ -566,7 +577,7 @@ async fn connect_selected_upstream(
             capacity_lease,
             transport: ConnectedTransport::WebSocket {
                 socket,
-                first_message,
+                first_messages,
             },
             observer,
             route_key,
@@ -640,6 +651,7 @@ async fn prepare_http_bridge_turn(
             &headers,
             &body,
             &codex_version,
+            state.codex_fingerprint.load().mode,
         )
         .await
         .map_err(|error| PrepareResponseError::Transport(error.to_string()))?;
@@ -705,7 +717,8 @@ async fn connect_upstream_websocket(
 async fn read_websocket_bootstrap(
     socket: &mut UpstreamWebSocket,
     deadline: tokio::time::Instant,
-) -> Result<UpstreamMessage, PrepareResponseError> {
+) -> Result<Vec<UpstreamMessage>, PrepareResponseError> {
+    let mut buffered = Vec::new();
     loop {
         let message = tokio::time::timeout_at(deadline, socket.next())
             .await
@@ -723,9 +736,31 @@ async fn read_websocket_bootstrap(
                 if let Some(error) = stream_payload_error(text.as_bytes()) {
                     return Err(PrepareResponseError::Upstream(error));
                 }
-                return Ok(UpstreamMessage::Text(text));
+                if stream_has_empty_completed_event(text.as_bytes())
+                    && !stream_has_semantic_output(text.as_bytes())
+                    && !stream_has_usage(text.as_bytes())
+                    && !buffered.iter().any(|message| {
+                        matches!(message, UpstreamMessage::Text(text) if stream_has_semantic_output(text.as_bytes()))
+                    })
+                    && !buffered.iter().any(|message| {
+                        matches!(message, UpstreamMessage::Text(text) if stream_has_usage(text.as_bytes()))
+                    })
+                {
+                    return Err(PrepareResponseError::Upstream(
+                        "upstream returned an empty response.completed event".to_string(),
+                    ));
+                }
+                let ready = stream_has_semantic_output(text.as_bytes())
+                    || stream_has_terminal_event(text.as_bytes());
+                buffered.push(UpstreamMessage::Text(text));
+                if ready {
+                    return Ok(buffered);
+                }
             }
-            UpstreamMessage::Binary(data) => return Ok(UpstreamMessage::Binary(data)),
+            UpstreamMessage::Binary(data) => {
+                buffered.push(UpstreamMessage::Binary(data));
+                return Ok(buffered);
+            }
             UpstreamMessage::Ping(data) => {
                 socket
                     .send(UpstreamMessage::Pong(data))
@@ -783,7 +818,10 @@ fn websocket_upstream_request(
     for name in [
         "accept-language",
         "conversation_id",
+        "session-id",
         "session_id",
+        "thread-id",
+        "x-client-request-id",
         "x-codex-beta-features",
         "x-codex-installation-id",
         "x-codex-parent-thread-id",
@@ -1244,37 +1282,42 @@ async fn relay_websockets(
     upstream: &mut UpstreamWebSocket,
     state: &Arc<ProxyState>,
     uri: &Uri,
+    inbound_headers: &HeaderMap,
     account: &Account,
     route_key: Option<u64>,
-    first_message: UpstreamMessage,
+    first_messages: Vec<UpstreamMessage>,
     first_observer: StreamBodyObserver,
     first_capacity_lease: UpstreamCapacityLease,
 ) -> Result<(), String> {
     let mut observer = Some(first_observer);
     let mut capacity_lease = Some(first_capacity_lease);
     let mut first_event_deadline = None;
-    match first_message {
-        UpstreamMessage::Text(text) => {
-            let terminal = stream_has_terminal_event(text.as_bytes());
-            if let Some(active) = observer.as_mut() {
-                active.observe_event(text.as_bytes());
+    for first_message in first_messages {
+        match first_message {
+            UpstreamMessage::Text(text) => {
+                let terminal = stream_has_terminal_event(text.as_bytes());
+                if let Some(active) = observer.as_mut() {
+                    active.observe_event(text.as_bytes());
+                }
+                client
+                    .send(ClientMessage::Text(text.to_string().into()))
+                    .await
+                    .map_err(|error| format!("向 Codex 转发 WebSocket 首个事件失败: {error}"))?;
+                if terminal {
+                    observer = None;
+                    capacity_lease.take();
+                }
             }
-            client
-                .send(ClientMessage::Text(text.to_string().into()))
-                .await
-                .map_err(|error| format!("向 Codex 转发 WebSocket 首个事件失败: {error}"))?;
-            if terminal {
-                observer = None;
-                capacity_lease.take();
+            UpstreamMessage::Binary(data) => {
+                client
+                    .send(ClientMessage::Binary(data))
+                    .await
+                    .map_err(|error| {
+                        format!("向 Codex 转发 WebSocket 首个二进制帧失败: {error}")
+                    })?;
             }
+            _ => return Err("WebSocket 启动阶段返回了无效首帧".to_string()),
         }
-        UpstreamMessage::Binary(data) => {
-            client
-                .send(ClientMessage::Binary(data))
-                .await
-                .map_err(|error| format!("向 Codex 转发 WebSocket 首个二进制帧失败: {error}"))?;
-        }
-        _ => return Err("WebSocket 启动阶段返回了无效首帧".to_string()),
     }
     loop {
         tokio::select! {
@@ -1297,6 +1340,16 @@ async fn relay_websockets(
                             && message_type == Some("response.create")
                         {
                             text = normalize_oauth_websocket_request(&text)?;
+                        }
+                        if message_type == Some("response.create") {
+                            let prepared = crate::codex_fingerprint::prepare(
+                                account,
+                                state.codex_fingerprint.load().mode,
+                                inbound_headers,
+                                text.as_bytes(),
+                            );
+                            text = String::from_utf8(prepared.body)
+                                .map_err(|error| format!("序列化 Codex 指纹请求失败: {error}"))?;
                         }
                         if message_type == Some("response.create") {
                             if observer.is_some() {

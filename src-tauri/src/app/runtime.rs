@@ -6,7 +6,9 @@ use crate::capacity::CapacityRegistry;
 use crate::cost_guard;
 use crate::db::Db;
 use crate::market::MarketState;
-use crate::{codex_identity, codex_takeover, image_generation, outbound_proxy, proxy};
+use crate::{
+    codex_fingerprint, codex_identity, codex_takeover, image_generation, outbound_proxy, proxy,
+};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -88,6 +90,9 @@ pub(crate) fn run() {
             let codex_version = Arc::new(arc_swap::ArcSwap::new(Arc::new(
                 codex_identity::load_version(&db),
             )));
+            let codex_fingerprint = Arc::new(arc_swap::ArcSwap::new(Arc::new(
+                codex_fingerprint::load(&db),
+            )));
             let outbound_proxy =
                 Arc::new(arc_swap::ArcSwap::new(Arc::new(outbound_proxy_settings)));
             let image_generation =
@@ -116,6 +121,7 @@ pub(crate) fn run() {
             let proxy_image_generation = Arc::clone(&image_generation);
             let proxy_client = Arc::clone(&proxy_http_client);
             let proxy_codex_version = Arc::clone(&codex_version);
+            let proxy_codex_fingerprint = Arc::clone(&codex_fingerprint);
             let proxy_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 proxy::start_proxy_server(
@@ -128,6 +134,7 @@ pub(crate) fn run() {
                     proxy_image_generation,
                     proxy_client,
                     proxy_codex_version,
+                    proxy_codex_fingerprint,
                     proxy_app,
                 )
                 .await;
@@ -147,6 +154,7 @@ pub(crate) fn run() {
                 outbound_proxy,
                 image_generation,
                 codex_version,
+                codex_fingerprint,
                 proxy_port,
                 proxy_profile,
                 capacity,
@@ -239,6 +247,8 @@ pub(crate) fn run() {
             super::proxy_settings::get_codex_client_settings,
             super::proxy_settings::update_codex_client_settings,
             super::proxy_settings::sync_codex_client_version,
+            super::proxy_settings::get_codex_fingerprint_settings,
+            super::proxy_settings::update_codex_fingerprint_settings,
             super::proxy_settings::get_proxy_info,
             super::clipboard::inspect_clipboard_import,
             super::clipboard::confirm_clipboard_import,

@@ -269,6 +269,7 @@ pub(super) async fn proxy_handler(
                     &headers,
                     &body,
                     &codex_version,
+                    state.codex_fingerprint.load().mode,
                 ),
             )
             .await
@@ -368,7 +369,15 @@ pub(super) async fn proxy_handler(
                 response.headers(),
                 status == StatusCode::TOO_MANY_REQUESTS,
             );
-            let policy = classify_failure(status, capability.model.is_some());
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok());
+            let mut policy = classify_failure_with_content_type(
+                status,
+                capability.model.is_some(),
+                content_type,
+            );
             if policy.switch_account {
                 if let Some(log) = &attempt_log {
                     log.mark_response(status.as_u16());
@@ -378,15 +387,26 @@ pub(super) async fn proxy_handler(
                     startup_deadline,
                     tokio::time::Instant::now() + UPSTREAM_ERROR_BODY_BUDGET,
                 );
-                let summary =
-                    tokio::time::timeout_at(summary_deadline, upstream_error_summary(response))
-                        .await
-                        .unwrap_or_else(|_| status.to_string());
+                let (summary, html_body) = tokio::time::timeout_at(
+                    summary_deadline,
+                    upstream_error_summary_and_html(response),
+                )
+                .await
+                .unwrap_or_else(|_| (status.to_string(), false));
+                if status == StatusCode::FORBIDDEN && html_body {
+                    policy = classify_failure_with_content_type(
+                        status,
+                        capability.model.is_some(),
+                        Some("text/html"),
+                    );
+                }
                 let error = format!("{}: {summary}", ready.name);
                 if let Some(log) = &attempt_log {
                     pending_retry = Some((log.clone(), error.clone()));
                 }
-                if !image_generation::is_dedicated_account(&ready) {
+                if !image_generation::is_dedicated_account(&ready)
+                    && !(status == StatusCode::FORBIDDEN && html_body)
+                {
                     let _ = state.db.set_error_async(&ready.id, &error).await;
                 }
                 if let Some(scope) = policy.cooldown_scope {
@@ -403,10 +423,6 @@ pub(super) async fn proxy_handler(
                     log.finish("error", Some(&status.to_string()));
                 }
                 return hold_capacity_lease(passthrough_client_response(response), capacity_lease);
-            }
-
-            if let Some(log) = &attempt_log {
-                log.mark_response(status.as_u16());
             }
 
             let first_event_deadline = std::cmp::min(
@@ -433,6 +449,9 @@ pub(super) async fn proxy_handler(
             {
                 Ok(Ok(prepared)) => prepared,
                 Ok(Err(error)) => {
+                    if let Some(log) = &attempt_log {
+                        log.mark_response(status.as_u16());
+                    }
                     if ready.account_type == "oauth" && error.is_transient_load_shed() {
                         let message = format!("{}: {error}", ready.name);
                         if load_shed_retries < MAX_SAME_ACCOUNT_LOAD_SHED_RETRIES {
@@ -481,6 +500,10 @@ pub(super) async fn proxy_handler(
                     break;
                 }
             };
+
+            if let Some(log) = &attempt_log {
+                log.mark_response(status.as_u16());
+            }
 
             state.clear_cooldown(&ready.id, &capability);
             if attempt_started.elapsed() <= STICKY_ROUTE_MAX_FIRST_EVENT_LATENCY {
@@ -709,6 +732,42 @@ pub(super) fn classify_failure(status: StatusCode, has_model: bool) -> FailurePo
             switch_account: false,
             cooldown_scope: None,
         },
+    }
+}
+
+pub(super) fn classify_failure_with_content_type(
+    status: StatusCode,
+    has_model: bool,
+    content_type: Option<&str>,
+) -> FailurePolicy {
+    if status == StatusCode::FORBIDDEN
+        && content_type.is_some_and(|value| value.to_ascii_lowercase().contains("text/html"))
+    {
+        return FailurePolicy {
+            switch_account: true,
+            cooldown_scope: has_model.then_some(CooldownScope::Capability),
+        };
+    }
+    classify_failure(status, has_model)
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn html_forbidden_is_capability_scoped_without_account_penalty() {
+        let policy = classify_failure_with_content_type(
+            StatusCode::FORBIDDEN,
+            true,
+            Some("text/html; charset=utf-8"),
+        );
+        assert!(policy.switch_account);
+        assert_eq!(policy.cooldown_scope, Some(CooldownScope::Capability));
+        let policy =
+            classify_failure_with_content_type(StatusCode::FORBIDDEN, false, Some("text/html"));
+        assert!(policy.switch_account);
+        assert_eq!(policy.cooldown_scope, None);
     }
 }
 

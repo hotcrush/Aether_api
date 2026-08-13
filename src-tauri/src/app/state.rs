@@ -1,5 +1,6 @@
 use super::clipboard::ClipboardImportState;
 use crate::capacity::CapacityRegistry;
+use crate::codex_fingerprint::CodexFingerprintSettings;
 use crate::cost_guard::CostGuardSettings;
 use crate::db::Db;
 use crate::image_generation::ImageGenerationSettings;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub outbound_proxy: Arc<ArcSwap<OutboundProxySettings>>,
     pub image_generation: Arc<ArcSwap<ImageGenerationSettings>>,
     pub codex_version: Arc<ArcSwap<String>>,
+    pub codex_fingerprint: Arc<ArcSwap<CodexFingerprintSettings>>,
     pub proxy_port: u16,
     pub proxy_profile: &'static str,
     pub capacity: Arc<CapacityRegistry>,

@@ -13,6 +13,7 @@ import type {
   CodexSkillState,
   CodexTakeoverStatus,
   CodexClientSettings,
+  CodexFingerprintSettings,
   ClipboardImportCandidate,
   CostGuardSettings,
   ImageGenerationSettings,
@@ -641,6 +642,11 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}codex-client`, JSON.stringify(next))
       return next as T
     }
+    case 'get_codex_fingerprint_settings':
+      return JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}codex-fingerprint`) ?? '{"mode":"session"}') as T
+    case 'update_codex_fingerprint_settings':
+      window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}codex-fingerprint`, JSON.stringify(args?.settings))
+      return args?.settings as T
     case 'delete_account': {
       const previousLength = previewAccounts.length
       previewAccounts = previewAccounts.filter((account) => account.id !== args?.id)
@@ -830,7 +836,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return deleted as T
     }
     case 'get_app_version':
-      return { version: '0.1.0-alpha.18', commit: 'dev', build_time: '2026-08-12' } as T
+      return { version: '0.1.0-alpha.19', commit: 'dev', build_time: '2026-08-13' } as T
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }
@@ -917,6 +923,12 @@ export const updateCodexClientSettings = (autoSyncEnabled: boolean) =>
 
 export const syncCodexClientVersion = () =>
   call<CodexClientSettings>('sync_codex_client_version')
+
+export const getCodexFingerprintSettings = () =>
+  call<CodexFingerprintSettings>('get_codex_fingerprint_settings')
+
+export const updateCodexFingerprintSettings = (settings: CodexFingerprintSettings) =>
+  call<CodexFingerprintSettings>('update_codex_fingerprint_settings', { settings })
 
 export const deleteAccount = (id: string) =>
   call<boolean>('delete_account', { id })

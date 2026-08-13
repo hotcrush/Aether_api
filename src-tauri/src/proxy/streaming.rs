@@ -126,6 +126,7 @@ pub(super) struct StreamBodyObserver {
     failure_recorded: bool,
     usage_recorded: bool,
     terminal_seen: bool,
+    semantic_output_seen: bool,
 }
 
 impl StreamBodyObserver {
@@ -140,6 +141,7 @@ impl StreamBodyObserver {
             failure_recorded: false,
             usage_recorded: false,
             terminal_seen: false,
+            semantic_output_seen: false,
         }
     }
 
@@ -189,6 +191,10 @@ impl StreamBodyObserver {
     pub(super) fn observe_event(&mut self, event: &[u8]) {
         let terminal = stream_has_terminal_event(event);
         let cancelled = stream_has_cancelled_event(event);
+        self.semantic_output_seen |= stream_has_semantic_output(event);
+        let empty_completed = stream_has_empty_completed_event(event)
+            && !self.semantic_output_seen
+            && !self.usage_recorded;
         if let Ok(text) = std::str::from_utf8(event) {
             let model = if self.sse {
                 extract_response_model_from_sse(text)
@@ -237,6 +243,12 @@ impl StreamBodyObserver {
         if cancelled && !self.failure_recorded {
             self.failure_recorded = true;
             self.context.record_cancelled();
+        } else if empty_completed && !self.failure_recorded {
+            self.failure_recorded = true;
+            self.context.record_failure(
+                CooldownScope::Capability,
+                "upstream returned an empty response.completed event",
+            );
         } else if terminal && !self.failure_recorded {
             self.context.record_success();
         }
@@ -302,6 +314,11 @@ pub(super) async fn to_client_response(
             return Err(PrepareResponseError::Upstream(format!(
                 "upstream stream failed: {error}"
             )));
+        }
+        if sse_bootstrap_is_empty_completed(text.as_bytes()) {
+            return Err(PrepareResponseError::Upstream(
+                "upstream returned an empty response.completed event".to_string(),
+            ));
         }
         let usage = extract_usage_from_sse(&text);
         if let Some(model) = extract_response_model_from_sse(&text) {
@@ -449,7 +466,12 @@ where
                         "upstream stream failed before first payload: {error}"
                     )));
                 }
-                if sse_has_payload(&buffered) {
+                if sse_bootstrap_is_empty_completed(&buffered) {
+                    return Err(PrepareResponseError::Upstream(
+                        "upstream returned an empty response.completed event".to_string(),
+                    ));
+                }
+                if sse_has_semantic_payload(&buffered) {
                     return Ok(Bytes::from(buffered));
                 }
                 if buffered.len() > MAX_STREAM_BOOTSTRAP_BYTES {
@@ -472,7 +494,7 @@ where
     }
 }
 
-pub(super) fn sse_has_payload(buffer: &[u8]) -> bool {
+fn sse_has_semantic_payload(buffer: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(buffer) else {
         return false;
     };
@@ -480,25 +502,157 @@ pub(super) fn sse_has_payload(buffer: &[u8]) -> bool {
     let Some(last_delimiter) = normalized.rfind("\n\n") else {
         return false;
     };
-    let inspected = &normalized[..last_delimiter];
-    inspected.lines().any(|line| {
+    normalized[..last_delimiter].lines().any(|line| {
         let Some(data) = line.strip_prefix("data:").map(str::trim) else {
             return false;
         };
-        if data.is_empty() {
-            return false;
-        }
         if data == "[DONE]" {
             return true;
         }
-        let Ok(value) = serde_json::from_str::<Value>(data) else {
-            return true;
-        };
-        !matches!(
-            value.get("type").and_then(Value::as_str),
-            Some("error" | "response.failed")
-        )
+        serde_json::from_str::<Value>(data)
+            .ok()
+            .is_some_and(|value| {
+                stream_value_has_semantic_output(&value)
+                    || is_terminal_stream_value(&value)
+                    || stream_payload_error(data.as_bytes()).is_some()
+            })
     })
+}
+
+fn sse_bootstrap_is_empty_completed(buffer: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(buffer) else {
+        return false;
+    };
+    let mut semantic_output = false;
+    let mut usage = false;
+    for line in text.replace("\r\n", "\n").lines() {
+        let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        semantic_output |= stream_value_has_semantic_output(&value);
+        usage |= extract_usage_from_value(&value).is_some_and(|usage| usage.total_tokens > 0);
+        if responses_completed_value_is_empty(&value) && !semantic_output && !usage {
+            return true;
+        }
+    }
+    false
+}
+
+pub(super) fn stream_has_semantic_output(chunk: &[u8]) -> bool {
+    stream_values(chunk).any(|value| stream_value_has_semantic_output(&value))
+}
+
+pub(super) fn stream_has_empty_completed_event(chunk: &[u8]) -> bool {
+    stream_values(chunk).any(|value| responses_completed_value_is_empty(&value))
+}
+
+pub(super) fn stream_has_usage(chunk: &[u8]) -> bool {
+    stream_values(chunk)
+        .any(|value| extract_usage_from_value(&value).is_some_and(|usage| usage.total_tokens > 0))
+}
+
+fn stream_values(chunk: &[u8]) -> impl Iterator<Item = Value> + '_ {
+    std::str::from_utf8(chunk)
+        .into_iter()
+        .flat_map(|text| text.lines())
+        .filter_map(|line| {
+            let text = line
+                .strip_prefix("data:")
+                .map(str::trim)
+                .unwrap_or(line.trim());
+            serde_json::from_str::<Value>(text).ok()
+        })
+}
+
+fn stream_value_has_semantic_output(value: &Value) -> bool {
+    match value.get("type").and_then(Value::as_str) {
+        None => true,
+        Some(
+            "response.created"
+            | "response.in_progress"
+            | "response.queued"
+            | "response.completed"
+            | "response.done"
+            | "response.incomplete"
+            | "response.cancelled"
+            | "response.canceled"
+            | "rate_limits.updated",
+        ) => false,
+        Some("error" | "response.failed") => false,
+        Some(event_type) if event_type.ends_with(".delta") => {
+            value.get("delta").is_some_and(|delta| match delta {
+                Value::String(delta) => !delta.is_empty(),
+                Value::Object(object) => !object.is_empty(),
+                _ => false,
+            })
+        }
+        Some(
+            "response.output_text.done"
+            | "response.reasoning_summary_text.done"
+            | "response.reasoning_text.done"
+            | "response.audio_transcript.done",
+        ) => value
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty()),
+        Some("response.function_call_arguments.done") => value
+            .get("arguments")
+            .and_then(Value::as_str)
+            .is_some_and(|arguments| !arguments.is_empty()),
+        Some("response.custom_tool_call_input.done") => value
+            .get("input")
+            .and_then(Value::as_str)
+            .is_some_and(|input| !input.is_empty()),
+        Some("response.image_generation_call.partial_image") => value
+            .get("partial_image_b64")
+            .and_then(Value::as_str)
+            .is_some_and(|image| !image.is_empty()),
+        Some("response.content_part.added" | "response.content_part.done") => {
+            value.get("part").is_some_and(value_has_visible_content)
+        }
+        Some("response.output_item.added" | "response.output_item.done") => {
+            value.get("item").is_some_and(value_has_visible_content)
+        }
+        Some(_) => true,
+    }
+}
+
+fn value_has_visible_content(value: &Value) -> bool {
+    ["text", "transcript", "arguments", "input", "result"]
+        .into_iter()
+        .any(|field| {
+            value
+                .get(field)
+                .and_then(Value::as_str)
+                .is_some_and(|content| !content.is_empty())
+        })
+        || value
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().any(value_has_visible_content))
+}
+
+fn responses_completed_value_is_empty(value: &Value) -> bool {
+    if !matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("response.completed" | "response.done")
+    ) {
+        return false;
+    }
+    let response = value.get("response").unwrap_or(value);
+    let has_usage = response.get("usage").is_some()
+        || value.get("usage").is_some()
+        || value.pointer("/data/usage").is_some()
+        || value.pointer("/data/response/usage").is_some();
+    let has_error = response.get("error").is_some() || value.get("error").is_some();
+    let has_output = response
+        .get("output")
+        .and_then(Value::as_array)
+        .is_some_and(|output| !output.is_empty());
+    !has_usage && !has_error && !has_output
 }
 
 struct ClientStreamSanitizer {
@@ -810,13 +964,25 @@ pub(super) fn authorized(headers: &HeaderMap, expected: &str) -> bool {
 }
 
 pub(super) async fn upstream_error_summary(response: reqwest::Response) -> String {
+    upstream_error_summary_and_html(response).await.0
+}
+
+pub(super) async fn upstream_error_summary_and_html(response: reqwest::Response) -> (String, bool) {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    serde_json::from_str::<Value>(&body)
+    let trimmed = body.trim_start();
+    let lowercase = trimmed
+        .chars()
+        .take(32)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let is_html = lowercase.starts_with("<!doctype html") || lowercase.starts_with("<html");
+    let summary = serde_json::from_str::<Value>(&body)
         .ok()
         .and_then(|value| stream_error_from_value(&value))
         .map(|message| format!("{status} {message}"))
-        .unwrap_or_else(|| status.to_string())
+        .unwrap_or_else(|| status.to_string());
+    (summary, is_html)
 }
 
 pub(super) fn passthrough_client_response(response: reqwest::Response) -> Response {

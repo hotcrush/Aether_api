@@ -16,6 +16,9 @@ fn test_state() -> ProxyState {
         codex_version: Arc::new(arc_swap::ArcSwap::new(Arc::new(
             crate::codex_identity::DEFAULT_CODEX_VERSION.to_string(),
         ))),
+        codex_fingerprint: Arc::new(arc_swap::ArcSwap::new(Arc::new(
+            crate::codex_fingerprint::CodexFingerprintSettings::default(),
+        ))),
         app_handle: None,
         capacity: Arc::new(CapacityRegistry::default()),
         relay_capacity: Arc::new(CapacityRegistry::default()),
@@ -60,6 +63,52 @@ fn oauth_normalization_removes_disabled_truncation_and_rejects_auto() {
     )
     .unwrap_err();
     assert!(error.contains("truncation=auto"));
+}
+
+#[test]
+fn responses_input_ids_are_stripped_only_when_the_prefix_is_invalid() {
+    let body = br#"{
+        "input": [
+            {"type":"message","id":"item_old"},
+            {"type":"message","id":"msg_valid"},
+            {"type":"reasoning","id":"item_reasoning"},
+            {"type":"reasoning","id":"rs_valid"},
+            {"type":"function_call","id":"call_old"},
+            {"type":"function_call","id":"fc_valid"},
+            {"type":"function_call_output","id":"call_output"}
+        ]
+    }"#;
+    let (sanitized, changed) = sanitize_responses_tool_parameter_types(body);
+    assert!(changed);
+    let value: Value = serde_json::from_slice(&sanitized).unwrap();
+    let input = value.get("input").and_then(Value::as_array).unwrap();
+    assert!(input[0].get("id").is_none());
+    assert_eq!(
+        input[1].get("id").and_then(Value::as_str),
+        Some("msg_valid")
+    );
+    assert!(input[2].get("id").is_none());
+    assert_eq!(input[3].get("id").and_then(Value::as_str), Some("rs_valid"));
+    assert!(input[4].get("id").is_none());
+    assert_eq!(input[5].get("id").and_then(Value::as_str), Some("fc_valid"));
+    assert_eq!(
+        input[6].get("id").and_then(Value::as_str),
+        Some("call_output")
+    );
+}
+
+#[test]
+fn nested_response_usage_is_found_after_native_paths() {
+    let native = json!({
+        "usage": {"input_tokens": 2, "output_tokens": 3},
+        "data": {"usage": {"input_tokens": 50, "output_tokens": 50}}
+    });
+    assert_eq!(extract_usage_from_value(&native).unwrap().total_tokens, 5);
+
+    let nested = json!({
+        "data": {"response": {"usage": {"input_tokens": 4, "output_tokens": 6}}}
+    });
+    assert_eq!(extract_usage_from_value(&nested).unwrap().total_tokens, 10);
 }
 
 #[test]
@@ -773,6 +822,25 @@ async fn stream_bootstrap_rejects_empty_and_error_before_first_payload() {
         .await
         .is_err());
 
+    let mut empty_completed = Box::pin(futures::stream::iter(vec![Ok::<_, &'static str>(
+        Bytes::from_static(
+            b"data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n",
+        ),
+    )]));
+    let error = read_stream_bootstrap(empty_completed.as_mut(), true)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("empty response.completed"));
+
+    let mut completed_with_usage = Box::pin(futures::stream::iter(vec![Ok::<_, &'static str>(
+        Bytes::from_static(
+            b"data: {\"type\":\"response.completed\",\"response\":{\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+        ),
+    )]));
+    assert!(read_stream_bootstrap(completed_with_usage.as_mut(), true)
+        .await
+        .is_ok());
+
     let first_payload = Bytes::from_static(b"data: {\"type\":\"response.created\"}\n\n");
     let later_error = Bytes::from_static(
         b"event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"slow_down\"}}\n\n",
@@ -782,13 +850,9 @@ async fn stream_bootstrap_rejects_empty_and_error_before_first_payload() {
         Ok(first_payload.clone()),
         Ok(later_error.clone()),
     ]));
-    assert_eq!(
-        read_stream_bootstrap(committed.as_mut(), true)
-            .await
-            .unwrap(),
-        first_payload
-    );
-    assert_eq!(committed.next().await.unwrap().unwrap(), later_error);
+    assert!(read_stream_bootstrap(committed.as_mut(), true)
+        .await
+        .is_err());
 
     let output =
         Bytes::from_static(b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n");
@@ -799,9 +863,10 @@ async fn stream_bootstrap_rejects_empty_and_error_before_first_payload() {
     let bootstrap = read_stream_bootstrap(ready.as_mut(), true).await.unwrap();
     assert_eq!(
         bootstrap,
-        Bytes::from_static(b"data: {\"type\":\"response.created\"}\n\n")
+        Bytes::from_static(
+            b"data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n"
+        )
     );
-    assert_eq!(ready.next().await.unwrap().unwrap(), output);
 
     let large_metadata = "x".repeat(128 * 1024);
     let large_created = Bytes::from(format!(
@@ -812,10 +877,7 @@ async fn stream_bootstrap_rejects_empty_and_error_before_first_payload() {
         Ok::<_, &'static str>(large_created.slice(..split_at)),
         Ok(large_created.slice(split_at..)),
     ]));
-    assert_eq!(
-        read_stream_bootstrap(large.as_mut(), true).await.unwrap(),
-        large_created
-    );
+    assert!(read_stream_bootstrap(large.as_mut(), true).await.is_err());
 }
 
 #[test]

@@ -70,6 +70,7 @@ pub(super) async fn send_upstream(
     inbound_headers: &HeaderMap,
     body: &[u8],
     codex_version: &str,
+    fingerprint_mode: crate::codex_fingerprint::CodexFingerprintMode,
 ) -> Result<reqwest::Response, SendUpstreamError> {
     let oauth_account = account.account_type == "oauth";
     let target = if oauth_account {
@@ -87,6 +88,21 @@ pub(super) async fn send_upstream(
     } else {
         body.to_vec()
     };
+    let prepared = if is_responses_path(uri.path()) {
+        crate::codex_fingerprint::prepare(
+            account,
+            fingerprint_mode,
+            inbound_headers,
+            &normalized_body,
+        )
+    } else {
+        crate::codex_fingerprint::PreparedRequest {
+            headers: inbound_headers.clone(),
+            body: normalized_body,
+        }
+    };
+    let inbound_headers = &prepared.headers;
+    let normalized_body = prepared.body;
     let prompt_cache_key = serde_json::from_slice::<Value>(&normalized_body)
         .ok()
         .and_then(|value| {
@@ -109,7 +125,10 @@ pub(super) async fn send_upstream(
     for name in [
         "accept-language",
         "conversation_id",
+        "session-id",
         "session_id",
+        "thread-id",
+        "x-client-request-id",
         "x-codex-beta-features",
         "x-codex-installation-id",
         "x-codex-turn-state",
@@ -347,12 +366,34 @@ pub(super) fn sanitize_responses_tool_parameter_types_in_object(
         .is_some_and(|tools| sanitize_tool_array(tools, 0));
     if let Some(Value::Array(input)) = object.get_mut("input") {
         for item in input {
+            if let Some(item) = item.as_object_mut() {
+                changed |= strip_invalid_responses_item_id(item);
+            }
             if let Some(tools) = item.get_mut("tools") {
                 changed |= sanitize_tool_array(tools, 0);
             }
         }
     }
     changed
+}
+
+fn strip_invalid_responses_item_id(item: &mut serde_json::Map<String, Value>) -> bool {
+    let Some(id) = item.get("id").and_then(Value::as_str) else {
+        return false;
+    };
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+    let valid = match item_type {
+        "message" => id.starts_with("msg"),
+        "reasoning" => id.starts_with("rs"),
+        "function_call" | "tool_call" | "local_shell_call" | "tool_search_call"
+        | "custom_tool_call" | "mcp_tool_call" => id.starts_with("fc"),
+        _ => true,
+    };
+    if valid {
+        return false;
+    }
+    item.remove("id");
+    true
 }
 
 fn sanitize_tool_array(tools: &mut Value, depth: usize) -> bool {

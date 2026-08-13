@@ -111,11 +111,32 @@ impl RawProbe {
     fn succeeded(&self) -> bool {
         self.status.is_some_and(|status| status.is_success()) && self.value.is_some()
     }
+
+    fn responses_verdict_is_inconclusive(&self) -> bool {
+        if self.endpoint != ProbeEndpoint::Responses || !self.status.is_some_and(|s| s.is_success())
+        {
+            return false;
+        }
+        let Some(value) = self.value.as_ref() else {
+            return false;
+        };
+        match value.get("status").and_then(Value::as_str) {
+            Some("failed") => true,
+            Some("incomplete") => {
+                value
+                    .pointer("/incomplete_details/reason")
+                    .and_then(Value::as_str)
+                    == Some("max_output_tokens")
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
 struct ProbeEvaluation {
     request_succeeded: bool,
+    inconclusive: bool,
     capability_passed: bool,
     observed_model: Option<String>,
     model_mismatch: bool,
@@ -606,6 +627,24 @@ fn evaluate_probe(
     requested_model: &str,
 ) -> ProbeEvaluation {
     let mut checks = Vec::new();
+    if raw.responses_verdict_is_inconclusive() {
+        checks.push(check(
+            format!("probe_{}", kind.key()),
+            kind.label(),
+            "warn",
+            "Responses 探针未正常完成，本次不据此判定上游能力",
+        ));
+        return ProbeEvaluation {
+            request_succeeded: false,
+            inconclusive: true,
+            capability_passed: false,
+            observed_model: None,
+            model_mismatch: false,
+            total_tokens: 0,
+            reasoning_tokens: 0,
+            checks,
+        };
+    }
     if !raw.succeeded() {
         checks.push(check(
             format!("probe_{}", kind.key()),
@@ -619,6 +658,7 @@ fn evaluate_probe(
         ));
         return ProbeEvaluation {
             request_succeeded: false,
+            inconclusive: false,
             capability_passed: false,
             observed_model: None,
             model_mismatch: false,
@@ -680,6 +720,7 @@ fn evaluate_probe(
     let (total_tokens, reasoning_tokens) = extract_usage(value);
     ProbeEvaluation {
         request_succeeded: true,
+        inconclusive: false,
         capability_passed,
         observed_model,
         model_mismatch,
@@ -707,6 +748,11 @@ fn score_result(declared: Option<bool>, evaluations: &[ProbeEvaluation]) -> (u8,
         .filter(|evaluation| evaluation.request_succeeded && evaluation.observed_model.is_none())
         .count();
     let request_failures = evaluations.len().saturating_sub(successful);
+    let inconclusive = evaluations
+        .iter()
+        .filter(|evaluation| evaluation.inconclusive)
+        .count();
+    let request_failures = request_failures.saturating_sub(inconclusive);
 
     let mut penalty = 0_i32;
     if declared == Some(false) {
@@ -1024,6 +1070,28 @@ mod tests {
         );
         let relay = json!({"models": ["gpt-5", {"model": "gpt-4.1"}]});
         assert_eq!(extract_declared_models(&relay), vec!["gpt-4.1", "gpt-5"]);
+    }
+
+    #[test]
+    fn unfinished_responses_probes_are_inconclusive() {
+        let probe = |value| RawProbe {
+            status: Some(StatusCode::OK),
+            value: Some(value),
+            error: String::new(),
+            endpoint: ProbeEndpoint::Responses,
+        };
+        assert!(probe(json!({"status":"failed"})).responses_verdict_is_inconclusive());
+        assert!(probe(json!({
+            "status":"incomplete",
+            "incomplete_details":{"reason":"max_output_tokens"}
+        }))
+        .responses_verdict_is_inconclusive());
+        assert!(!probe(json!({"status":"completed"})).responses_verdict_is_inconclusive());
+        assert!(!probe(json!({
+            "status":"incomplete",
+            "incomplete_details":{"reason":"content_filter"}
+        }))
+        .responses_verdict_is_inconclusive());
     }
 
     #[test]

@@ -122,7 +122,8 @@ pub(super) fn extract_usage_from_value(value: &Value) -> Option<UsageBreakdown> 
         .or_else(|| value.get("usage"))
         .or_else(|| response.get("usageMetadata"))
         .or_else(|| value.get("usageMetadata"))
-        .or_else(|| value.pointer("/data/usage"))?;
+        .or_else(|| value.pointer("/data/usage"))
+        .or_else(|| value.pointer("/data/response/usage"))?;
     let model = response
         .get("model")
         .or_else(|| value.get("model"))

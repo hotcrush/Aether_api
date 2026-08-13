@@ -41,6 +41,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
 use crate::capacity::{CapacityLease, CapacityRegistry};
+use crate::codex_fingerprint::CodexFingerprintSettings;
 use crate::cost_guard::CostGuardSettings;
 use crate::db::{Account, Db, RequestLogStart, RequestLogUsage};
 use crate::image_generation::{self, ImageGenerationSettings};
@@ -312,6 +313,7 @@ pub struct ProxyState {
     pub cost_guard: Arc<arc_swap::ArcSwap<CostGuardSettings>>,
     pub image_generation: Arc<arc_swap::ArcSwap<ImageGenerationSettings>>,
     pub codex_version: Arc<arc_swap::ArcSwap<String>>,
+    pub codex_fingerprint: Arc<arc_swap::ArcSwap<CodexFingerprintSettings>>,
     app_handle: Option<tauri::AppHandle>,
     capacity: Arc<CapacityRegistry>,
     relay_capacity: Arc<CapacityRegistry>,
@@ -745,6 +747,7 @@ pub async fn start_proxy_server(
     image_generation: Arc<arc_swap::ArcSwap<ImageGenerationSettings>>,
     client: Arc<arc_swap::ArcSwap<reqwest::Client>>,
     codex_version: Arc<arc_swap::ArcSwap<String>>,
+    codex_fingerprint: Arc<arc_swap::ArcSwap<CodexFingerprintSettings>>,
     app_handle: tauri::AppHandle,
 ) {
     let state = Arc::new(ProxyState {
@@ -754,6 +757,7 @@ pub async fn start_proxy_server(
         cost_guard,
         image_generation,
         codex_version,
+        codex_fingerprint,
         app_handle: Some(app_handle),
         capacity,
         relay_capacity: Arc::new(CapacityRegistry::default()),

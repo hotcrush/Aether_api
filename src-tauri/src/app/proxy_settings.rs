@@ -3,7 +3,7 @@ use crate::cost_guard::{self, CostGuardSettings};
 use crate::db::Db;
 use crate::image_generation::{self, ImageGenerationSettings};
 use crate::outbound_proxy::{self, OutboundProxySettings};
-use crate::{codex_identity, codex_takeover, pricing};
+use crate::{codex_fingerprint, codex_identity, codex_takeover, pricing};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
@@ -96,6 +96,23 @@ pub(crate) async fn sync_codex_client_version(
 ) -> Result<codex_identity::CodexClientSettings, String> {
     let client = state.client.load_full();
     codex_identity::sync_latest_version(&state.db, &client, &state.codex_version, true).await
+}
+
+#[tauri::command]
+pub(crate) fn get_codex_fingerprint_settings(
+    state: tauri::State<AppState>,
+) -> codex_fingerprint::CodexFingerprintSettings {
+    state.codex_fingerprint.load().as_ref().clone()
+}
+
+#[tauri::command]
+pub(crate) fn update_codex_fingerprint_settings(
+    state: tauri::State<AppState>,
+    settings: codex_fingerprint::CodexFingerprintSettings,
+) -> Result<codex_fingerprint::CodexFingerprintSettings, String> {
+    let settings = codex_fingerprint::save(&state.db, settings)?;
+    state.codex_fingerprint.store(Arc::new(settings.clone()));
+    Ok(settings)
 }
 
 #[tauri::command]

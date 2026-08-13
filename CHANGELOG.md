@@ -38,6 +38,24 @@
 
 ## [Unreleased]
 
+## [0.1.0-alpha.19] - 2026-08-13
+
+### Added
+
+- 新增 Codex OAuth 设备指纹收敛设置，支持关闭、设备级、会话级和完整模式
+
+### Changed
+
+- 统一 HTTP、HTTP/SSE 桥接与原生 WebSocket 的 Codex 会话指纹和轮次标识
+- 扩展 Responses 用量解析，兼容 `data.usage` 与 `data.response.usage`
+
+### Fixed
+
+- 修复 Responses 消息、推理和工具调用项目 ID 前缀不符合 Codex 要求的问题
+- 修复上游返回空 `response.completed`/`response.done` 时未及时切换账号的问题
+- 修复上游 HTML 403 被错误记为账号级故障的问题
+- 修复 Responses 探测将失败或 `max_output_tokens` 截断响应误判为不支持的问题
+
 ## [0.1.0-alpha.18] - 2026-08-12
 
 ### Added

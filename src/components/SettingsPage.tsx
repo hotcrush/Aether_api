@@ -6,16 +6,18 @@ import { CodexSettingsPanel, type CodexSettingsPanelProps } from './CodexSetting
 import {
   getAppVersion,
   getCodexClientSettings,
+  getCodexFingerprintSettings,
   getCostGuardSettings,
   getOutboundProxySettings,
   getImageGenerationSettings,
   syncCodexClientVersion,
   updateCodexClientSettings,
+  updateCodexFingerprintSettings,
   updateCostGuardSettings,
   updateOutboundProxySettings,
   updateImageGenerationSettings,
 } from '../lib/commands'
-import type { AppVersion, CodexClientSettings, CostGuardSettings, ImageGenerationSettings, OutboundProxySettings } from '../types'
+import type { AppVersion, CodexClientSettings, CodexFingerprintMode, CodexFingerprintSettings, CostGuardSettings, ImageGenerationSettings, OutboundProxySettings } from '../types'
 
 interface SettingsPageProps {
   onOpenTrash?: () => void
@@ -38,6 +40,9 @@ export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
   const [codexClient, setCodexClient] = useState<CodexClientSettings | null>(null)
   const [codexClientBusy, setCodexClientBusy] = useState(false)
   const [codexClientError, setCodexClientError] = useState('')
+  const [codexFingerprint, setCodexFingerprint] = useState<CodexFingerprintSettings | null>(null)
+  const [codexFingerprintBusy, setCodexFingerprintBusy] = useState(false)
+  const [codexFingerprintError, setCodexFingerprintError] = useState('')
 
   useEffect(() => {
     isEnabled().then(setAutostart).catch(() => setAutostart(false))
@@ -46,6 +51,7 @@ export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
     getOutboundProxySettings().then(setOutboundProxy).catch(() => setOutboundProxyError('无法读取出站代理设置'))
     getImageGenerationSettings().then(setImageGeneration).catch(() => setImageGenerationError('无法读取图片生成上游设置'))
     getCodexClientSettings().then(setCodexClient).catch(() => setCodexClientError('无法读取 Codex 客户端设置'))
+    getCodexFingerprintSettings().then(setCodexFingerprint).catch(() => setCodexFingerprintError('无法读取 Codex 指纹设置'))
   }, [])
 
   const toggleAutostart = async () => {
@@ -129,6 +135,19 @@ export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
       setCodexClientError(error instanceof Error ? error.message : '同步 Codex 客户端版本失败')
     } finally {
       setCodexClientBusy(false)
+    }
+  }
+
+  const saveCodexFingerprint = async (mode: CodexFingerprintMode) => {
+    if (codexFingerprintBusy) return
+    setCodexFingerprintBusy(true)
+    setCodexFingerprintError('')
+    try {
+      setCodexFingerprint(await updateCodexFingerprintSettings({ mode }))
+    } catch (error) {
+      setCodexFingerprintError(error instanceof Error ? error.message : '保存 Codex 指纹设置失败')
+    } finally {
+      setCodexFingerprintBusy(false)
     }
   }
 
@@ -279,6 +298,34 @@ export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
               立即同步
             </button>
           </div>
+          <div className="settings-row settings-fingerprint-row">
+            <div className="settings-row-info">
+              <ShieldCheck size={16} />
+              <div>
+                <span className="settings-row-label">OAuth 设备指纹收敛</span>
+                <span className="settings-row-desc">减少共享账号向 OpenAI 暴露的设备和会话数量；默认保留每个 Codex 会话的独立线程</span>
+              </div>
+            </div>
+            <div className="settings-segmented" aria-label="OAuth 设备指纹收敛模式">
+              {([
+                ['off', '关闭'],
+                ['device', '设备'],
+                ['session', '会话'],
+                ['full', '完全'],
+              ] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={codexFingerprint?.mode === mode ? 'active' : ''}
+                  onClick={() => { void saveCodexFingerprint(mode) }}
+                  disabled={!codexFingerprint || codexFingerprintBusy}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {codexFingerprintError && <span className="settings-error">{codexFingerprintError}</span>}
           {codexClientError && <span className="settings-error">{codexClientError}</span>}
         </div>
 

@@ -51,6 +51,38 @@
 
 .settings-row-top { padding-top: 2px; }
 
+.settings-fingerprint-row { align-items: center; }
+
+.settings-segmented {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(42px, 1fr));
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+.settings-segmented button {
+  min-width: 42px;
+  height: 25px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.settings-segmented button.active {
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.settings-segmented button:disabled { cursor: not-allowed; opacity: 0.55; }
+
 .cost-guard-fields {
   display: flex;
   gap: 10px;

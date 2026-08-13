@@ -3,6 +3,7 @@ mod app;
 mod billing_sync;
 mod capacity;
 mod channel_monitor;
+mod codex_fingerprint;
 mod codex_history;
 mod codex_identity;
 mod codex_resources;

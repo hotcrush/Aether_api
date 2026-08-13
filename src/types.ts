@@ -69,6 +69,12 @@ export interface CodexClientSettings {
   synced_at: number | null
 }
 
+export type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
+
+export interface CodexFingerprintSettings {
+  mode: CodexFingerprintMode
+}
+
 export interface OpenAIAuthorization {
   authUrl: string
   sessionId: string
