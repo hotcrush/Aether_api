@@ -22,11 +22,11 @@
   align-items: flex-start;
   gap: 9px;
   padding: 11px 16px;
-  border: 1px solid #c9dfd9;
+  border: 1px solid var(--success-border);
   border-radius: 8px;
-  background: #f5fbf9;
-  box-shadow: 0 10px 30px rgba(30, 43, 55, 0.16);
-  color: #285c51;
+  background: var(--success-soft);
+  box-shadow: var(--shadow-popover);
+  color: var(--success-text);
   font-size: 12px;
   pointer-events: auto;
   animation: toast-in 0.28s var(--ease-out) both;
@@ -64,7 +64,7 @@
 }
 
 .toast.error {
-  border-color: #eccbd0;
-  background: #fff7f8;
-  color: #983844;
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
 }

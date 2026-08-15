@@ -645,3 +645,457 @@ tbody tr:hover {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Semantic palette alignment ──
+ * This file is loaded last, so legacy feature styles resolve to one iOS
+ * system palette without changing their layout or component behavior.
+ */
+
+/* Neutral controls and supporting text */
+.win-btn,
+.icon-btn,
+.menu-item,
+.page-drop-zone,
+.quota-query,
+.quota-refresh,
+.relay-inline-refresh,
+.market-icon-action,
+.market-page-button,
+.logger-refresh,
+.logger-clear,
+.monitor-probe,
+.monitor-integrity-trigger {
+  color: var(--text-secondary);
+}
+
+.win-btn:hover,
+.menu-item:hover:not(:disabled),
+.auto-refresh-toggle:hover,
+.market-setting-toggle:hover:not(.disabled) {
+  background: var(--fill);
+  color: var(--text);
+}
+
+.menu-item:active:not(:disabled),
+.win-btn:active {
+  background: var(--fill-strong);
+}
+
+.win-btn-close:hover {
+  background: var(--danger);
+  color: var(--text-on-accent);
+}
+
+.win-btn-close:active {
+  background: var(--danger-hover);
+  color: var(--text-on-accent);
+}
+
+.version-badge {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.version-badge:hover {
+  background: var(--primary-border);
+}
+
+.version-badge.has-update,
+.codex-status.active,
+.logger-live-state,
+.proxy-profile.production,
+.market-feedback:not(.market-feedback-error),
+.market-price-tier.bargain,
+.market-price-badge.bargain,
+.market-price-tier.market-bargain,
+.market-price-badge.market-bargain,
+.market-price-tier-bargain,
+.market-verification-badge.verified,
+.market-store-status,
+.market-permission-status.granted,
+.market-permission-status.authorized,
+.market-notification-status.granted,
+.market-notification-status.authorized,
+.uw-badge-local,
+.uw-badge-allowed,
+.usage-window-label.short,
+.monitor-summary-card.healthy .monitor-summary-icon,
+.monitor-detail-status.operational,
+.monitor-integrity-checks > div > span {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.brand-mark {
+  background: linear-gradient(145deg, var(--primary), var(--violet) 78%);
+  color: var(--text-on-accent);
+  box-shadow: 0 3px 10px var(--primary-border);
+}
+
+.badge-spinner {
+  border-color: var(--primary-border);
+  border-top-color: var(--primary);
+}
+
+.update-overlay,
+.overlay {
+  background: var(--backdrop);
+}
+
+.update-modal,
+.dialog {
+  background: var(--surface);
+  box-shadow: var(--shadow-popover);
+}
+
+.update-progress-bar,
+.app-tooltip,
+.app-tooltip::after {
+  background: var(--tooltip-bg);
+  color: var(--text-on-accent);
+}
+
+.update-progress-fill {
+  background: var(--success);
+}
+
+.update-progress-label,
+.workspace-tab-badge,
+.market-section-count,
+.market-alert-count,
+.oauth-step-number {
+  color: var(--text-on-accent);
+}
+
+.state-dot,
+.logger-live-state.paused > span,
+.monitor-state-dot,
+.market-store-disabled .market-store-state,
+.market-alert-indicator {
+  background: var(--text-muted);
+  box-shadow: 0 0 0 3px var(--fill);
+}
+
+.state-dot.online,
+.logger-live-state > span,
+.monitor-state-dot.operational,
+.market-store-state,
+.pickup-order-status.done {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+
+.monitor-state-dot.degraded,
+.pickup-order-status:not(.done),
+.market-severity-warning .market-signal-icon,
+.market-severity-warning .market-alert-indicator {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+
+.monitor-state-dot.failed,
+.monitor-state-dot.error,
+.market-store-abnormal .market-store-state,
+.market-severity-danger .market-signal-icon,
+.market-severity-danger .market-alert-indicator,
+.market-severity-error .market-signal-icon,
+.market-severity-error .market-alert-indicator {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
+/* Tables, forms and grouped content */
+th,
+.logger-list-head,
+.market-chart-panel > header,
+.market-signal-list > header,
+.market-category-card > header,
+.codex-history-head,
+.codex-skills-toolbar {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+
+td,
+.logger-entry,
+.codex-detail-row,
+.codex-skill-row,
+.market-alert-row,
+.market-signal-row,
+.pickup-order-row {
+  border-color: var(--separator);
+}
+
+.account-name,
+.usage-number,
+.codex-detail-row > code,
+.codex-prompt-editor textarea,
+.logger-time time,
+.logger-request-line code,
+.logger-upstream strong,
+.logger-usage strong,
+.page-drop-copy strong,
+.drop-zone strong,
+.clipboard-account strong {
+  color: var(--text);
+}
+
+.credential,
+.relay-endpoint,
+.relay-weight,
+.priority-editor input,
+.rate-multiplier-input input,
+.field label,
+.confirm-copy {
+  color: var(--text-secondary);
+}
+
+.drop-zone,
+.file-chip,
+.rate-auto-toggle,
+.rate-sync-button,
+.capacity-editor {
+  border-color: var(--border);
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+}
+
+.drop-zone {
+  border-style: dashed;
+}
+
+.result-summary,
+.oauth-dialog-intro,
+.logger-feedback,
+.market-refresh-progress {
+  border-color: var(--primary-border);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.result-summary span + span {
+  border-color: var(--primary-border);
+}
+
+.result-summary strong,
+.market-refresh-progress-head strong {
+  color: var(--primary);
+}
+
+.error-detail,
+.trash-purge-btn:hover:not(:disabled),
+.market-feedback-error {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.error-title,
+.error-list {
+  color: var(--danger-text);
+}
+
+.error-label-rate,
+.badge-key,
+.uw-badge-used,
+.capacity-editor.active,
+.logger-status.status-retry,
+.logger-entry.status-retry .logger-message {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+
+.error-label-auth {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.error-label-server {
+  background: var(--violet-soft);
+  color: var(--violet-text);
+}
+
+.error-label-generic,
+.error-code-badge,
+.badge-plan,
+.logger-status.status-cancelled,
+.codex-status:not(.active) {
+  background: var(--fill);
+  color: var(--text-secondary);
+}
+
+.badge-oauth,
+.usage-window-label.long,
+.logger-status.status-pending {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.status-switch-track,
+.settings-toggle,
+.auto-refresh-switch,
+.market-setting-switch {
+  background: var(--fill-strong);
+}
+
+.status-switch-thumb,
+.settings-toggle-knob,
+.auto-refresh-switch span,
+.market-setting-switch > span {
+  background: var(--surface);
+  box-shadow: var(--shadow-control);
+}
+
+.status-button.active,
+.settings-token-state.ready,
+.pickup-import-ok,
+.stat-cost .stat-value,
+.codex-action-meta svg,
+.codex-prompt-item > svg:last-child,
+.logger-usage span,
+.monitor-metric.healthy strong,
+.market-summary-item.market-tone-healthy > strong,
+.market-product-row.cheapest .market-product-price strong,
+.market-product-row.market-bargain .market-product-price strong,
+.market-product-row.bargain .market-product-price strong,
+.market-notification-permission.market-permission-granted > svg {
+  color: var(--success-text);
+}
+
+.usage-window-track,
+.relay-quota-track,
+.monitor-capacity-track,
+.market-refresh-progress-track,
+.monitor-timeline > span,
+.market-setting-switch {
+  background: var(--fill-strong);
+}
+
+.usage-window-track.healthy span,
+.relay-quota-track.healthy span,
+.monitor-timeline > span.operational,
+.market-refresh-progress-track > span {
+  background: var(--success);
+}
+
+.market-refresh-progress-track > span,
+.market-chart-line {
+  background: var(--primary);
+  stroke: var(--primary);
+}
+
+.market-chart-area {
+  fill: var(--primary-soft);
+}
+
+.usage-window-track.warning span,
+.relay-quota-track.warning span,
+.monitor-timeline > span.degraded {
+  background: var(--warning);
+}
+
+.usage-window-track.critical span,
+.relay-quota-track.critical span,
+.monitor-timeline > span.failed,
+.monitor-timeline > span.error {
+  background: var(--danger);
+}
+
+.monitor-timeline > span.unknown {
+  background: var(--fill-strong);
+}
+
+.relay-cost-value.warning {
+  color: var(--warning-text);
+}
+
+.relay-cost-value.critical {
+  color: var(--danger-text);
+}
+
+/* Page-specific feedback cards */
+.monitor-feedback,
+.pickup-feedback {
+  border-color: var(--primary-border);
+}
+
+.pickup-error,
+.monitor-channel-card.error,
+.monitor-channel-card.failed,
+.monitor-integrity-summary.high_risk,
+.monitor-integrity-result.high_risk {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+
+.monitor-integrity-summary.healthy,
+.monitor-integrity-result,
+.monitor-integrity-checks > div > span {
+  border-color: var(--success-border);
+}
+
+.monitor-integrity-summary.suspicious,
+.monitor-integrity-summary.inconclusive,
+.monitor-integrity-result.suspicious,
+.monitor-integrity-result.inconclusive {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+}
+
+.monitor-integrity-intro,
+.market-refresh-progress {
+  border-color: var(--primary-border);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.monitor-integrity-result-head strong {
+  color: var(--success-text);
+}
+
+.market-summary-item.market-tone-healthy::before {
+  background: var(--success);
+}
+
+.market-product-row.cheapest,
+.market-product-row.market-bargain,
+.market-product-row.bargain {
+  box-shadow: inset 2px 0 var(--success);
+}
+
+.logger-entry.status-error {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.logger-entry.status-retry {
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+.logger-status.status-success {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.logger-status.status-error {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.codex-resource-feedback {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.codex-prompt-list,
+.codex-prompt-editor textarea,
+.codex-skill-list {
+  scrollbar-color: var(--fill-strong) transparent;
+}
+
+.codex-prompt-list::-webkit-scrollbar-thumb,
+.codex-prompt-editor textarea::-webkit-scrollbar-thumb,
+.codex-skill-list::-webkit-scrollbar-thumb {
+  background: var(--fill-strong);
+}

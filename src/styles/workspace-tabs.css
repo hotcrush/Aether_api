@@ -11,7 +11,7 @@
   min-width: 0;
   padding: 5px clamp(12px, 2vw, 24px) 0;
   border-bottom: 1px solid var(--border);
-  background: #edf0f3;
+  background: var(--bg);
   user-select: none;
 }
 
@@ -52,12 +52,12 @@
   bottom: 7px;
   width: 1px;
   height: 18px;
-  background: #d5dbe1;
+  background: var(--separator);
   content: '';
 }
 
 .workspace-tab:hover {
-  background: rgba(255, 255, 255, 0.58);
+  background: var(--surface-elevated);
   color: var(--text);
 }
 
@@ -148,7 +148,7 @@
   padding: 0 4px;
   border-radius: 8px;
   background: var(--danger);
-  color: #fff;
+  color: var(--text-on-accent);
   font-size: 9px;
   font-weight: 720;
   line-height: 1;
@@ -179,7 +179,7 @@
 }
 
 .workspace-tab-close:hover {
-  background: #dfe4e9;
+  background: var(--fill);
   color: var(--text);
 }
 
@@ -217,7 +217,7 @@
 
 .workspace-tab-add:hover,
 .workspace-tab-add[aria-expanded='true'] {
-  background: #dfe4e9;
+  background: var(--fill);
   color: var(--text);
 }
 

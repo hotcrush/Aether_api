@@ -5,11 +5,11 @@
   z-index: 1200;
   max-width: min(360px, calc(100vw - 20px));
   padding: 7px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--fill);
   border-radius: 7px;
-  background: #1d2935;
-  box-shadow: 0 8px 24px rgba(16, 25, 34, 0.22);
-  color: #f5f7f9;
+  background: var(--tooltip-bg);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-on-accent);
   font-size: 11px;
   font-weight: 500;
   line-height: 1.5;
@@ -36,19 +36,19 @@
   left: var(--tooltip-arrow-left);
   width: 7px;
   height: 7px;
-  background: #1d2935;
+  background: var(--tooltip-bg);
   content: '';
   transform: translateX(-50%) rotate(45deg);
 }
 
 .app-tooltip.top::after {
   bottom: -4px;
-  border-right: 1px solid rgba(255, 255, 255, 0.1);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-right: 1px solid var(--fill);
+  border-bottom: 1px solid var(--fill);
 }
 
 .app-tooltip.bottom::after {
   top: -4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid var(--fill);
+  border-left: 1px solid var(--fill);
 }
