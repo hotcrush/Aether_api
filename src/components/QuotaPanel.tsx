@@ -1,6 +1,6 @@
 import { AlertCircle, Gauge, RefreshCw } from 'lucide-react'
 import { formatDateTime, formatShortTime, parseDate } from '../lib/time'
-import type { AccountQuota, QuotaQueryState, QuotaWindow } from '../types'
+import type { AccountQuota, LocalQuotaWindowUsage, QuotaQueryState, QuotaWindow } from '../types'
 
 interface QuotaPanelProps {
   state?: QuotaQueryState
@@ -53,7 +53,6 @@ export function QuotaPanel({
   }
 
   const windows = primaryWindows(state.quota)
-  const estimate = quotaLimitEstimate(state.quota)
   const resetCredits = resetCreditSummary(state.quota)
   return (
     <div className="quota-cell">
@@ -61,18 +60,6 @@ export function QuotaPanel({
         <div className="quota-call-meta">
           <span>{requestCount.toLocaleString()} req</span>
           {state.quota.plan_type && <span className="quota-plan">{state.quota.plan_type}</span>}
-          {estimate ? (
-            <span className="quota-limit-estimate" data-tooltip={estimate.tooltip}>
-              ≈ ${estimate.amount} / {estimate.window}
-            </span>
-          ) : (
-            <span
-              className="quota-limit-estimate pending"
-              data-tooltip="需要本周期至少 1% 的额度占用，并有经过本应用的成功请求费用后才能测算"
-            >
-              额度待测
-            </span>
-          )}
         </div>
         <button
           className="quota-refresh"
@@ -95,6 +82,7 @@ export function QuotaPanel({
             <UsageWindow
               entry={entry}
               fetchedAt={state.quota.fetched_at}
+              localUsage={localWindowUsage(state.quota, entry.label)}
               key={`${entry.slot}-${entry.label}`}
             />
           ))}
@@ -109,9 +97,11 @@ export function QuotaPanel({
 function UsageWindow({
   entry,
   fetchedAt,
+  localUsage,
 }: {
   entry: QuotaWindowEntry
   fetchedAt: number | string
+  localUsage: LocalQuotaWindowUsage | null
 }) {
   const used = usedPercent(entry.window)
   const tone = used === null ? '' : used >= 90 ? 'critical' : used >= 70 ? 'warning' : 'healthy'
@@ -128,6 +118,14 @@ function UsageWindow({
         {w.num_tokens != null && (
           <span className="uw-badge">{formatTokenCount(w.num_tokens)}</span>
         )}
+        {localUsage && (
+          <span
+            className="uw-badge uw-badge-local"
+            data-tooltip={`本机同期 ${localUsage.requests.toLocaleString()} 个成功请求、${formatTokenCount(localUsage.tokens)} Token；按当前模型 API 价目折算，仅用于成本观察，不参与 Codex 配额结算。`}
+          >
+            本机 API ${formatUsd(localUsage.api_equivalent_cost_usd)}
+          </span>
+        )}
       </div>
       <div className="usage-window-bar">
         <span className={`usage-window-label ${entry.label === '5h' ? 'short' : 'long'}`}>
@@ -136,7 +134,9 @@ function UsageWindow({
         <div className={`usage-window-track ${tone}`} aria-hidden="true">
           {used !== null && <span style={{ width: `${used}%` }} />}
         </div>
-        <strong>{used === null ? '--' : formatPercent(used)}</strong>
+        <strong data-tooltip={used === null ? undefined : `OpenAI 官方窗口：已用 ${formatPercent(used)}，剩余 ${formatPercent(100 - used)}`}>
+          {used === null ? '--' : formatPercent(used)}
+        </strong>
         <span className="usage-window-reset" data-tooltip={exactReset ? `重置于 ${exactReset}` : undefined}>
           {reset || '未知'}
         </span>
@@ -223,20 +223,14 @@ function finiteNumber(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-function quotaLimitEstimate(quota: AccountQuota) {
-  const limit = finiteNumber(quota.estimated_limit_usd)
-  const sampleCost = finiteNumber(quota.estimated_sample_cost_usd)
-  const usedPercent = finiteNumber(quota.estimated_sample_used_percent)
-  const sampleRequests = finiteNumber(quota.estimated_sample_requests)
-  const window = quota.estimated_limit_window === '5h' ? '5h' : '7d'
-  if (limit === null || limit <= 0 || sampleCost === null || usedPercent === null) return null
-  const amount = limit >= 100 ? Math.round(limit).toLocaleString() : limit.toFixed(1)
-  const requestText = sampleRequests !== null ? `${Math.round(sampleRequests).toLocaleString()} 个请求，` : ''
-  return {
-    amount,
-    window,
-    tooltip: `按当前 ${window} 周期内本机的 ${requestText}估算成本 $${sampleCost.toFixed(4)} ÷ 已用 ${usedPercent.toFixed(1)}% 推算；仅统计经过本应用的成功请求。`,
-  }
+function localWindowUsage(quota: AccountQuota, window: '5h' | '7d') {
+  return quota.local_window_usage?.find((entry) => entry.window === window) ?? null
+}
+
+function formatUsd(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0.00'
+  if (value >= 100) return Math.round(value).toLocaleString()
+  return value.toFixed(2)
 }
 
 function resetCreditSummary(quota: AccountQuota) {

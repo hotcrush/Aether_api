@@ -153,6 +153,13 @@ export interface MarketRefreshResult {
   snapshot: MarketSnapshot
 }
 
+export interface MarketRefreshProgress {
+  completed: number
+  total: number
+  shopToken: string | null
+  shopName: string | null
+}
+
 export const DEFAULT_MARKET_ALERT_SETTINGS: MarketAlertSettings = {
   enabled: true,
   nativeEnabled: true,
@@ -320,4 +327,11 @@ export function listenMarketAlert(
 ): Promise<UnlistenFn> {
   if (previewMode) return Promise.resolve(() => {})
   return listen<MarketEvent>('market:alert', ({ payload }) => handler(payload))
+}
+
+export function listenMarketRefreshProgress(
+  handler: (progress: MarketRefreshProgress) => void,
+): Promise<UnlistenFn> {
+  if (previewMode) return Promise.resolve(() => {})
+  return listen<MarketRefreshProgress>('market:refresh-progress', ({ payload }) => handler(payload))
 }

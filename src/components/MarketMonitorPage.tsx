@@ -36,6 +36,7 @@ import {
   getMarketNotificationPermission,
   getMarketSnapshot,
   listenMarketAlert,
+  listenMarketRefreshProgress,
   listenMarketSnapshot,
   listMarketAlerts,
   markMarketAlertsRead,
@@ -51,6 +52,7 @@ import {
   type MarketNotificationPermission,
   type MarketProduct,
   type MarketRange,
+  type MarketRefreshProgress,
   type MarketShop,
   type MarketShopInput,
   type MarketSnapshot,
@@ -120,6 +122,7 @@ export function MarketMonitorPage({
   const [loading, setLoading] = useState(true)
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [refreshProgress, setRefreshProgress] = useState<MarketRefreshProgress | null>(null)
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [notificationPermission, setNotificationPermission] = useState<MarketNotificationPermission>('checking')
   const [permissionRequesting, setPermissionRequesting] = useState(false)
@@ -161,6 +164,7 @@ export function MarketMonitorPage({
 
     let stopSnapshot: (() => void) | undefined
     let stopAlert: (() => void) | undefined
+    let stopRefreshProgress: (() => void) | undefined
     void listenMarketSnapshot((value) => { if (!disposed) setSnapshot(value) })
       .then((stop) => disposed ? stop() : (stopSnapshot = stop))
       .catch(() => undefined)
@@ -170,11 +174,17 @@ export function MarketMonitorPage({
     })
       .then((stop) => disposed ? stop() : (stopAlert = stop))
       .catch(() => undefined)
+    void listenMarketRefreshProgress((value) => {
+      if (!disposed) setRefreshProgress(value)
+    })
+      .then((stop) => disposed ? stop() : (stopRefreshProgress = stop))
+      .catch(() => undefined)
 
     return () => {
       disposed = true
       stopSnapshot?.()
       stopAlert?.()
+      stopRefreshProgress?.()
     }
   }, [])
 
@@ -209,6 +219,12 @@ export function MarketMonitorPage({
   const refresh = async () => {
     if (refreshing) return
     setRefreshing(true)
+    setRefreshProgress({
+      completed: 0,
+      total: snapshot?.shops.filter((shop) => shop.enabled).length ?? 0,
+      shopToken: null,
+      shopName: null,
+    })
     setNotice('')
     try {
       const result = await refreshMarket()
@@ -221,6 +237,7 @@ export function MarketMonitorPage({
       setError(errorText(nextError))
     } finally {
       setRefreshing(false)
+      setRefreshProgress(null)
     }
   }
 
@@ -410,6 +427,29 @@ export function MarketMonitorPage({
             {refreshing ? '刷新中' : '立即刷新'}
           </button>
         </header>
+
+        {refreshing && refreshProgress && (
+          <div className="market-refresh-progress" role="status" aria-live="polite">
+            <div className="market-refresh-progress-head">
+              <span>正在刷新店铺</span>
+              <strong>
+                {refreshProgress.completed}/{refreshProgress.total || '—'}
+              </strong>
+              <span className="market-refresh-progress-shop">
+                {refreshProgress.shopName || '准备连接店铺…'}
+              </span>
+            </div>
+            <div className="market-refresh-progress-track" aria-hidden="true">
+              <span
+                style={{
+                  width: `${refreshProgress.total > 0
+                    ? Math.min(100, (refreshProgress.completed / refreshProgress.total) * 100)
+                    : 8}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="market-feedback market-feedback-error" role="alert">

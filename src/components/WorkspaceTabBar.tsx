@@ -5,6 +5,7 @@ import {
   Globe2,
   EyeOff,
   Plus,
+  PackagePlus,
   ScrollText,
   Server,
   Settings,
@@ -38,6 +39,7 @@ interface WorkspaceTabBarProps {
 
 const PAGE_META: Record<InternalPageId, { label: string; icon: TabIcon }> = {
   upstreams: { label: '上游管理', icon: Server },
+  pickup: { label: 'Team 取号', icon: PackagePlus },
   monitor: { label: '渠道监控', icon: Activity },
   market: { label: '市场监控', icon: Store },
   logs: { label: '请求日志', icon: ScrollText },

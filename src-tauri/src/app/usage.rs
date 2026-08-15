@@ -63,8 +63,8 @@ async fn query_quota_for_id(
         }
         Err(error) => return Err(error.to_string()),
     };
-    if let Err(error) = attach_estimated_limit(&state.db, &account, &mut usage) {
-        warn!(account_id = id, %error, "测算账号额度失败");
+    if let Err(error) = attach_local_window_usage(&state.db, &account, &mut usage) {
+        warn!(account_id = id, %error, "统计账号本机窗口用量失败");
     }
     match quota::full_cache_entry_json(&usage) {
         Ok(entry) => {
@@ -84,53 +84,49 @@ async fn query_quota_for_id(
     Ok(usage)
 }
 
-fn attach_estimated_limit(
+fn attach_local_window_usage(
     db: &Db,
     account: &Account,
     usage: &mut quota::QuotaUsage,
 ) -> Result<(), String> {
-    let mut windows = quota_estimate_windows(usage);
-    windows.sort_by(|left, right| right.1.cmp(&left.1));
+    usage.local_window_usage.clear();
 
-    for (window, duration) in windows {
-        let used_percent = window
-            .used_percent
-            .or_else(|| window.remaining_percent.map(|remaining| 100.0 - remaining))
-            .map(|value| value.clamp(0.0, 100.0));
-        let Some(used_percent) = used_percent.filter(|value| *value >= 1.0) else {
+    for (window, duration) in quota_usage_windows(usage) {
+        let window_name = if duration <= 21_600 { "5h" } else { "7d" };
+        if usage
+            .local_window_usage
+            .iter()
+            .any(|entry| entry.window == window_name)
+        {
             continue;
-        };
+        }
         let reset_at = window.reset_at.filter(|value| *value > 0).or_else(|| {
             window
                 .reset_after_seconds
                 .filter(|value| *value >= 0)
                 .map(|value| usage.fetched_at.saturating_add(value))
         });
-        let Some(window_started_at) = reset_at.map(|value| value.saturating_sub(duration)) else {
-            continue;
-        };
-        let (request_count, sample_cost) = db
-            .account_estimated_cost_since(&account.id, window_started_at)
+        let window_started_at = reset_at
+            .filter(|value| *value >= usage.fetched_at)
+            .map(|value| value.saturating_sub(duration))
+            .unwrap_or_else(|| usage.fetched_at.saturating_sub(duration));
+        let (requests, tokens, api_equivalent_cost_usd) = db
+            .account_usage_since(&account.id, window_started_at)
             .map_err(|error| error.to_string())?;
-        if request_count <= 0 || !sample_cost.is_finite() || sample_cost <= 0.0 {
+        if requests <= 0 || !api_equivalent_cost_usd.is_finite() {
             continue;
         }
-        let estimated_limit = sample_cost * 100.0 / used_percent;
-        if !estimated_limit.is_finite() || estimated_limit <= 0.0 {
-            continue;
-        }
-        usage.estimated_limit_usd = Some(estimated_limit);
-        usage.estimated_limit_window =
-            Some(if duration <= 21_600 { "5h" } else { "7d" }.to_string());
-        usage.estimated_sample_cost_usd = Some(sample_cost);
-        usage.estimated_sample_requests = Some(request_count);
-        usage.estimated_sample_used_percent = Some(used_percent);
-        break;
+        usage.local_window_usage.push(quota::LocalQuotaWindowUsage {
+            window: window_name.to_string(),
+            requests,
+            tokens,
+            api_equivalent_cost_usd: api_equivalent_cost_usd.max(0.0),
+        });
     }
     Ok(())
 }
 
-fn quota_estimate_windows(usage: &quota::QuotaUsage) -> Vec<(quota::RateLimitWindow, i64)> {
+fn quota_usage_windows(usage: &quota::QuotaUsage) -> Vec<(quota::RateLimitWindow, i64)> {
     fn from_limit(limit: Option<&quota::RateLimit>) -> Vec<(quota::RateLimitWindow, i64)> {
         let Some(limit) = limit else {
             return Vec::new();
@@ -263,7 +259,52 @@ pub(super) fn open_relay_site(state: tauri::State<AppState>, id: String) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::relay_site_url;
+    use super::{quota_usage_windows, relay_site_url};
+    use crate::quota::{QuotaUsage, RateLimit, RateLimitWindow};
+
+    fn quota_window(used_percent: f64, seconds: Option<i64>) -> RateLimitWindow {
+        RateLimitWindow {
+            used_percent: Some(used_percent),
+            remaining_percent: Some(100.0 - used_percent),
+            limit_window_seconds: seconds,
+            reset_after_seconds: None,
+            reset_at: None,
+            num_requests: None,
+            num_requests_limit: None,
+            num_tokens: None,
+            num_tokens_limit: None,
+        }
+    }
+
+    #[test]
+    fn canonicalizes_codex_windows_by_duration_with_legacy_fallbacks() {
+        let usage = QuotaUsage {
+            rate_limit: Some(RateLimit {
+                primary_window: Some(quota_window(10.0, Some(18_000))),
+                secondary_window: Some(quota_window(20.0, Some(604_800))),
+                ..RateLimit::default()
+            }),
+            ..QuotaUsage::default()
+        };
+        let mut windows = quota_usage_windows(&usage)
+            .into_iter()
+            .map(|(window, seconds)| (seconds, window.used_percent.unwrap()))
+            .collect::<Vec<_>>();
+        windows.sort_by_key(|entry| entry.0);
+        assert_eq!(windows, vec![(18_000, 10.0), (604_800, 20.0)]);
+
+        let legacy = QuotaUsage {
+            rate_limit: Some(RateLimit {
+                primary_window: Some(quota_window(70.0, None)),
+                secondary_window: Some(quota_window(30.0, None)),
+                ..RateLimit::default()
+            }),
+            ..QuotaUsage::default()
+        };
+        let windows = quota_usage_windows(&legacy);
+        assert_eq!(windows[0].1, 604_800);
+        assert_eq!(windows[1].1, 18_000);
+    }
 
     #[test]
     fn normalizes_relay_api_url_to_site_url() {

@@ -502,6 +502,24 @@ fn show_exclusively<R: Runtime>(
     target.set_focus().map_err(|error| error.to_string())
 }
 
+fn hide_all_workspace_webviews<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &WorkspaceWebviewState,
+) -> Result<(), String> {
+    let labels: Vec<String> = registry(state)?
+        .values()
+        .map(|entry| entry.label.clone())
+        .collect();
+    for label in labels {
+        if let Some(webview) = app.get_webview(&label) {
+            // A child can already be closing while React switches tabs. Do
+            // not abort the rest of the cleanup in that race.
+            let _ = webview.hide();
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn report_copy<R: Runtime>(
     webview: Webview<R>,
@@ -681,9 +699,16 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
             LogicalSize::new(bounds.width, bounds.height),
         )
         .map_err(|error| error.to_string())?;
-    install_ldxp_request_header(&webview)?;
+    if let Err(error) = install_ldxp_request_header(&webview) {
+        let _ = webview.close();
+        return Err(error);
+    }
     if delayed_navigation {
-        webview.navigate(url).map_err(|error| error.to_string())?;
+        if let Err(error) = webview.navigate(url) {
+            let message = error.to_string();
+            let _ = webview.close();
+            return Err(message);
+        }
     }
 
     registry(&state)?.insert(
@@ -694,9 +719,17 @@ pub(crate) async fn create_workspace_webview<R: Runtime>(
         },
     );
     if request.visible {
-        show_exclusively(&app, &state, &webview)?;
+        if let Err(error) = show_exclusively(&app, &state, &webview) {
+            registry(&state)?.remove(&request.tab_id);
+            let _ = webview.close();
+            return Err(error);
+        }
     } else {
-        webview.hide().map_err(|error| error.to_string())?;
+        if let Err(error) = webview.hide() {
+            registry(&state)?.remove(&request.tab_id);
+            let _ = webview.close();
+            return Err(error.to_string());
+        }
     }
 
     Ok(WorkspaceWebviewDescriptor {
@@ -729,21 +762,13 @@ pub(crate) async fn sync_webview_tabs<R: Runtime>(
         .collect();
     for tab_id in stale_tab_ids {
         if let Some(webview) = managed_webview(&app, &state, &tab_id)? {
-            webview.close().map_err(|error| error.to_string())?;
+            let _ = webview.close();
         }
         registry(&state)?.remove(&tab_id);
     }
 
     let Some(active) = active else {
-        let labels: Vec<String> = registry(&state)?
-            .values()
-            .map(|entry| entry.label.clone())
-            .collect();
-        for label in labels {
-            if let Some(webview) = app.get_webview(&label) {
-                webview.hide().map_err(|error| error.to_string())?;
-            }
-        }
+        hide_all_workspace_webviews(&app, &state)?;
         caller.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     };
@@ -757,16 +782,27 @@ pub(crate) async fn sync_webview_tabs<R: Runtime>(
         .validate()?;
 
     if let Some(webview) = managed_webview(&app, &state, &active.tab_id)? {
-        webview
-            .set_bounds(bounds.as_rect())
-            .map_err(|error| error.to_string())?;
-        show_exclusively(&app, &state, &webview)?;
+        if let Err(error) = webview.set_bounds(bounds.as_rect()) {
+            let message = error.to_string();
+            let _ = hide_all_workspace_webviews(&app, &state);
+            let _ = caller.set_focus();
+            return Err(message);
+        }
+        if let Err(error) = show_exclusively(&app, &state, &webview) {
+            let _ = hide_all_workspace_webviews(&app, &state);
+            let _ = caller.set_focus();
+            return Err(error);
+        }
         return Ok(());
     }
 
-    create_workspace_webview(
-        caller,
-        app,
+    // Hide existing native children before creating a new one. If creation
+    // fails (for example, when a configured proxy is rejected by WebView2),
+    // no stale page can remain above the main UI and capture all input.
+    hide_all_workspace_webviews(&app, &state)?;
+    if let Err(error) = create_workspace_webview(
+        caller.clone(),
+        app.clone(),
         state,
         CreateWorkspaceWebviewRequest {
             tab_id: active.tab_id,
@@ -776,7 +812,11 @@ pub(crate) async fn sync_webview_tabs<R: Runtime>(
             use_outbound_proxy: active.use_outbound_proxy,
         },
     )
-    .await?;
+    .await
+    {
+        let _ = caller.set_focus();
+        return Err(error);
+    }
     Ok(())
 }
 

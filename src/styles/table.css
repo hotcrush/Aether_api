@@ -110,6 +110,13 @@ td.col-status {
   font-weight: 680;
 }
 
+.account-lock-badge {
+  display: inline-flex;
+  margin-left: 5px;
+  color: var(--accent, #3b82f6);
+  vertical-align: -2px;
+}
+
 .account-detail,
 .usage-label {
   margin-top: 4px;

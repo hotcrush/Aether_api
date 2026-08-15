@@ -31,6 +31,8 @@ pub struct Account {
     pub concurrency: i64,
     pub rate_multiplier: f64,
     pub auto_sync_rate_multiplier: bool,
+    /// Protects this account from the bulk "remove errored upstreams" action.
+    pub locked: bool,
     pub status: String,
     pub last_error: String,
     pub last_used_at: Option<String>,

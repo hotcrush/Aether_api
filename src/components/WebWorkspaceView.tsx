@@ -1,4 +1,5 @@
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { RefreshCw } from 'lucide-react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { syncWebviewTabs } from '../lib/webviewTabs'
 import type { WebWorkspaceTab, WorkspaceTab } from '../lib/workspaceTabs'
 
@@ -15,6 +16,8 @@ export function WebWorkspaceView({
 }: WebWorkspaceViewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const lastErrorRef = useRef('')
+  const [syncError, setSyncError] = useState('')
+  const [retryNonce, setRetryNonce] = useState(0)
   const openTabIds = useMemo(
     () => tabs.filter((tab) => tab.kind === 'web').map((tab) => tab.id),
     [tabs],
@@ -27,6 +30,7 @@ export function WebWorkspaceView({
       const message = error instanceof Error ? error.message : String(error)
       if (message === lastErrorRef.current) return
       lastErrorRef.current = message
+      setSyncError(message)
       onError(message)
     }
     const sync = () => {
@@ -50,7 +54,10 @@ export function WebWorkspaceView({
             height: bounds.height,
           } : undefined,
         })
-          .then(() => { lastErrorRef.current = '' })
+          .then(() => {
+            lastErrorRef.current = ''
+            setSyncError('')
+          })
           .catch(reportError)
       })
     }
@@ -68,13 +75,23 @@ export function WebWorkspaceView({
       window.removeEventListener('resize', sync)
       window.cancelAnimationFrame(frame)
     }
-  }, [activeTab?.id, activeTab?.url, onError, openTabsKey])
+  }, [activeTab?.id, activeTab?.url, onError, openTabsKey, retryNonce])
 
   return activeTab ? (
     <div
       className="web-tab-host"
       data-webview-tab-id={activeTab.id}
       ref={hostRef}
-    />
+    >
+      {syncError && (
+        <div className="web-tab-error" role="alert">
+          <strong>内置页面无法打开</strong>
+          <span>{syncError}</span>
+          <button className="btn" type="button" onClick={() => setRetryNonce((value) => value + 1)}>
+            <RefreshCw size={14} />重新加载
+          </button>
+        </div>
+      )}
+    </div>
   ) : null
 }

@@ -134,6 +134,29 @@
 .outbound-proxy-url input:focus { border-color: var(--primary); outline: 0; }
 .settings-error { display: block; margin-top: 6px; color: var(--danger); font-size: 10px; }
 
+.settings-token-state {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.settings-token-state.ready { color: #258562; }
+
+.pickup-token-setting { grid-template-columns: 58px minmax(0, 1fr); }
+
+.pickup-token-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pickup-token-input .btn {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 10px;
+}
+
 .settings-row-info {
   display: flex;
   align-items: flex-start;

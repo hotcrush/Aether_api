@@ -30,4 +30,5 @@ pub struct AppState {
     pub proxy_running: Arc<AtomicBool>,
     pub(super) clipboard_import: Mutex<ClipboardImportState>,
     pub(super) clipboard_reading: AtomicBool,
+    pub(super) pickup_orders: tokio::sync::Mutex<()>,
 }

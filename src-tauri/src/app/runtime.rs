@@ -165,6 +165,7 @@ pub(crate) fn run() {
                 proxy_running,
                 clipboard_import: Mutex::new(ClipboardImportState::default()),
                 clipboard_reading: AtomicBool::new(false),
+                pickup_orders: tokio::sync::Mutex::new(()),
             });
             app.manage(VaultState::new(app_dir.join("vault.stronghold")));
             app.manage(crate::webview_tabs::WorkspaceWebviewState::default());
@@ -231,6 +232,7 @@ pub(crate) fn run() {
             super::proxy_settings::set_cache,
             super::proxy_settings::merge_cache_entries,
             super::accounts::set_account_status,
+            super::accounts::set_account_locked,
             super::accounts::update_account,
             super::accounts::set_account_priority,
             super::accounts::set_account_concurrency,
@@ -250,6 +252,13 @@ pub(crate) fn run() {
             super::proxy_settings::get_codex_fingerprint_settings,
             super::proxy_settings::update_codex_fingerprint_settings,
             super::proxy_settings::get_proxy_info,
+            super::pickup::get_pickup_settings,
+            super::pickup::update_pickup_settings,
+            super::pickup::get_pickup_overview,
+            super::pickup::list_pickup_orders,
+            super::pickup::create_pickup_order,
+            super::pickup::refresh_pickup_order,
+            super::pickup::retry_pickup_order_import,
             super::clipboard::inspect_clipboard_import,
             super::clipboard::confirm_clipboard_import,
             super::clipboard::discard_clipboard_import,

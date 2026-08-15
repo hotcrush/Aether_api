@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Settings, Monitor, Info, MessageSquarePlus, Network, RefreshCw, ShieldCheck, Trash2, Image } from 'lucide-react'
+import { Settings, Monitor, Info, MessageSquarePlus, Network, RefreshCw, ShieldCheck, Trash2, Image, KeyRound } from 'lucide-react'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { open } from '@tauri-apps/plugin-shell'
 import { CodexSettingsPanel, type CodexSettingsPanelProps } from './CodexSettingsPanel'
@@ -10,14 +10,16 @@ import {
   getCostGuardSettings,
   getOutboundProxySettings,
   getImageGenerationSettings,
+  getPickupSettings,
   syncCodexClientVersion,
   updateCodexClientSettings,
   updateCodexFingerprintSettings,
   updateCostGuardSettings,
   updateOutboundProxySettings,
   updateImageGenerationSettings,
+  updatePickupSettings,
 } from '../lib/commands'
-import type { AppVersion, CodexClientSettings, CodexFingerprintMode, CodexFingerprintSettings, CostGuardSettings, ImageGenerationSettings, OutboundProxySettings } from '../types'
+import type { AppVersion, CodexClientSettings, CodexFingerprintMode, CodexFingerprintSettings, CostGuardSettings, ImageGenerationSettings, OutboundProxySettings, PickupSettings } from '../types'
 
 interface SettingsPageProps {
   onOpenTrash?: () => void
@@ -37,6 +39,9 @@ export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
   const [imageGeneration, setImageGeneration] = useState<ImageGenerationSettings | null>(null)
   const [imageGenerationBusy, setImageGenerationBusy] = useState(false)
   const [imageGenerationError, setImageGenerationError] = useState('')
+  const [pickupSettings, setPickupSettings] = useState<PickupSettings | null>(null)
+  const [pickupSettingsBusy, setPickupSettingsBusy] = useState(false)
+  const [pickupSettingsError, setPickupSettingsError] = useState('')
   const [codexClient, setCodexClient] = useState<CodexClientSettings | null>(null)
   const [codexClientBusy, setCodexClientBusy] = useState(false)
   const [codexClientError, setCodexClientError] = useState('')
@@ -50,6 +55,7 @@ export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
     getCostGuardSettings().then(setCostGuard).catch(() => setCostGuardError('无法读取成本保护设置'))
     getOutboundProxySettings().then(setOutboundProxy).catch(() => setOutboundProxyError('无法读取出站代理设置'))
     getImageGenerationSettings().then(setImageGeneration).catch(() => setImageGenerationError('无法读取图片生成上游设置'))
+    getPickupSettings().then(setPickupSettings).catch(() => setPickupSettingsError('无法读取 Team 取号设置'))
     getCodexClientSettings().then(setCodexClient).catch(() => setCodexClientError('无法读取 Codex 客户端设置'))
     getCodexFingerprintSettings().then(setCodexFingerprint).catch(() => setCodexFingerprintError('无法读取 Codex 指纹设置'))
   }, [])
@@ -109,6 +115,19 @@ export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
       setImageGenerationError(error instanceof Error ? error.message : '保存图片生成上游设置失败')
     } finally {
       setImageGenerationBusy(false)
+    }
+  }
+
+  const savePickupSettings = async () => {
+    if (!pickupSettings || pickupSettingsBusy) return
+    setPickupSettingsBusy(true)
+    setPickupSettingsError('')
+    try {
+      setPickupSettings(await updatePickupSettings({ customer_token: pickupSettings.customer_token.trim() }))
+    } catch (error) {
+      setPickupSettingsError(error instanceof Error ? error.message : '保存 Team 取号 Token 失败')
+    } finally {
+      setPickupSettingsBusy(false)
     }
   }
 
@@ -416,6 +435,42 @@ export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
           )}
           <span className="settings-row-desc">默认直连官方 OpenAI；中转站填写兼容 Responses API 的 Base URL（通常以 <code>/v1</code> 结尾）。图片请求仍保留当前出站代理设置。</span>
           {imageGenerationError && <span className="settings-error">{imageGenerationError}</span>}
+        </div>
+
+        <div className="settings-group">
+          <h3>Team 取号</h3>
+          <div className="settings-row settings-row-top">
+            <div className="settings-row-info">
+              <KeyRound size={16} />
+              <div>
+                <span className="settings-row-label">Customer Token</span>
+                <span className="settings-row-desc">用于新建 Team 取号订单；Token 只保存在本机数据库，由 Rust 后端发送给 bugteam.team。</span>
+              </div>
+            </div>
+            <span className={pickupSettings?.customer_token ? 'settings-token-state ready' : 'settings-token-state'}>
+              {pickupSettings?.customer_token ? '已配置' : '未配置'}
+            </span>
+          </div>
+          {pickupSettings && (
+            <label className="outbound-proxy-url pickup-token-setting">
+              <span>Token</span>
+              <div className="pickup-token-input">
+                <input
+                  type="password"
+                  value={pickupSettings.customer_token}
+                  disabled={pickupSettingsBusy}
+                  onChange={(event) => setPickupSettings({ ...pickupSettings, customer_token: event.target.value })}
+                  placeholder="cfk_..."
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <button className="btn" type="button" onClick={() => { void savePickupSettings() }} disabled={pickupSettingsBusy}>
+                  {pickupSettingsBusy ? '保存中…' : '保存'}
+                </button>
+              </div>
+            </label>
+          )}
+          {pickupSettingsError && <span className="settings-error">{pickupSettingsError}</span>}
         </div>
 
         <div className="settings-group">

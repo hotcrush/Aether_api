@@ -11,7 +11,9 @@
 @import './monitor.css';
 @import './market.css';
 @import './settings.css';
+@import './pickup.css';
 @import './overlays.css';
 @import './toast.css';
 @import './tooltip.css';
 @import './responsive.css';
+@import './ios-theme.css';

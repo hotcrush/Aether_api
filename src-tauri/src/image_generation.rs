@@ -88,6 +88,7 @@ pub fn dedicated_account(settings: &ImageGenerationSettings) -> Account {
         concurrency: 100,
         rate_multiplier: 1.0,
         auto_sync_rate_multiplier: false,
+        locked: false,
         status: "active".to_string(),
         last_error: String::new(),
         last_used_at: None,

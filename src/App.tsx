@@ -14,6 +14,7 @@ import { ImportDialog } from './components/ImportDialog'
 import { LoggerPage } from './components/LoggerPage'
 import { MarketMonitorPage, type MarketSection } from './components/MarketMonitorPage'
 import { OpenAIOAuthDialog } from './components/OpenAIOAuthDialog'
+import { PickupPage } from './components/PickupPage'
 import { SettingsPage } from './components/SettingsPage'
 import { PageImportDropZone } from './components/PageImportDropZone'
 import { ProxyPanel } from './components/ProxyPanel'
@@ -45,6 +46,7 @@ import {
   restoreCodexSessionHistory,
   setCodexTakeover,
   setAccountStatus,
+  setAccountLocked,
   setAccountPriority,
   setAccountConcurrency,
   setAccountAutoSyncRateMultiplier,
@@ -115,6 +117,7 @@ import type {
   ClipboardImportCandidate,
   OpenAIAuthorization,
   ProxyInfo,
+  PickupImportResult,
   QuotaRateLimit,
   QuotaQueryState,
   QuotaWindow,
@@ -364,6 +367,12 @@ export default function App() {
     await loadCodexTakeover().catch(() => undefined)
     await loadCodexSessionHistory().catch(() => undefined)
   }, [loadAccounts, loadProxy, loadCodexTakeover, loadCodexSessionHistory])
+
+  const handlePickupImported = useCallback((result: PickupImportResult) => {
+    void refreshData()
+      .then(() => notify(`取号账号已导入：新增 ${result.created}，更新 ${result.updated}`))
+      .catch((error) => notify(`取号已完成，但账号列表刷新失败：${errorText(error)}`, true))
+  }, [notify, refreshData])
 
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return
@@ -904,6 +913,23 @@ export default function App() {
     }
   }
 
+  const toggleAccountLock = async (account: Account) => {
+    const locked = !Boolean(account.locked)
+    const actionKey = `lock:${account.id}`
+    setActionBusy(actionKey, true)
+    try {
+      const updated = await setAccountLocked(account.id, locked)
+      if (!updated) throw new Error('上游不存在')
+      notify(locked ? '上游已锁定，批量移除报错上游时会保留' : '上游已解锁')
+      await refreshData()
+    } catch (error) {
+      notify(errorText(error), true)
+      await refreshData().catch(() => undefined)
+    } finally {
+      setActionBusy(actionKey, false)
+    }
+  }
+
   const openRelayWebsite = async (account: Account) => {
     const actionKey = `open-relay:${account.id}`
     setActionBusy(actionKey, true)
@@ -1258,9 +1284,10 @@ export default function App() {
   }
 
   const removeErrorAccounts = async () => {
-    const targets = accounts.filter((account) => account.last_error)
+    const errored = accounts.filter((account) => account.last_error)
+    const targets = errored.filter((account) => !account.locked)
     if (!targets.length) {
-      notify('没有报错上游')
+      notify(errored.length ? `已跳过 ${errored.length} 个已锁定报错上游` : '没有报错上游')
       return
     }
     setActionBusy('remove-errors', true)
@@ -1290,7 +1317,8 @@ export default function App() {
           relayAutoVersions.current.delete(account.id)
         }
       }
-      notify(`已移除 ${removed} 个报错上游`)
+      const skipped = errored.length - targets.length
+      notify(`已移除 ${removed} 个报错上游${skipped ? `，已跳过 ${skipped} 个已锁定上游` : ''}`)
       await refreshData()
     } catch (error) {
       notify(errorText(error), true)
@@ -1491,9 +1519,17 @@ export default function App() {
           onRateMultiplier={updateRateMultiplier}
           onAutoSyncRateMultiplier={setAutoSyncRateMultiplier}
           onSyncRateMultiplier={syncRateMultiplier}
+          onToggleLock={toggleAccountLock}
           onDelete={setDeleteTarget}
         />
       </main>
+      ) : activeTab === 'pickup' ? (
+      <PickupPage
+        onOpenSettings={() => {
+          setTabState((current) => openInternalWorkspaceTab(current, 'settings'))
+        }}
+        onAccountsImported={handlePickupImported}
+      />
       ) : activeTab === 'logs' ? (
       <LoggerPage />
       ) : activeTab === 'market' ? (
@@ -1665,15 +1701,7 @@ function mergeQuotaSnapshot(
     rate_limit_reset_credits:
       patch.rate_limit_reset_credits ?? current?.rate_limit_reset_credits ?? null,
     fetched_at: patch.fetched_at ?? current?.fetched_at ?? Date.now(),
-    estimated_limit_usd: patch.estimated_limit_usd ?? current?.estimated_limit_usd ?? null,
-    estimated_limit_window:
-      patch.estimated_limit_window ?? current?.estimated_limit_window ?? null,
-    estimated_sample_cost_usd:
-      patch.estimated_sample_cost_usd ?? current?.estimated_sample_cost_usd ?? null,
-    estimated_sample_requests:
-      patch.estimated_sample_requests ?? current?.estimated_sample_requests ?? null,
-    estimated_sample_used_percent:
-      patch.estimated_sample_used_percent ?? current?.estimated_sample_used_percent ?? null,
+    local_window_usage: patch.local_window_usage ?? current?.local_window_usage ?? [],
   }
 }
 

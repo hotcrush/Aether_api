@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, KeyRound, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { Activity, AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, KeyRound, Lock, Pencil, RefreshCw, Trash2, Unlock } from 'lucide-react'
 import { useState } from 'react'
 import { formatExpiry } from '../lib/time'
 import type { Account, QuotaQueryState, RelayUsageQueryState } from '../types'
@@ -86,6 +86,7 @@ interface AccountTableProps {
   onRateMultiplier: (account: Account, multiplier: number) => void
   onAutoSyncRateMultiplier: (account: Account, enabled: boolean) => void
   onSyncRateMultiplier: (account: Account) => void
+  onToggleLock: (account: Account) => void
   onDelete: (account: Account) => void
 }
 
@@ -111,6 +112,7 @@ export function AccountTable({
   onRateMultiplier,
   onAutoSyncRateMultiplier,
   onSyncRateMultiplier,
+  onToggleLock,
   onDelete,
 }: AccountTableProps) {
   const [page, setPage] = useState(0)
@@ -157,6 +159,7 @@ export function AccountTable({
                 onRateMultiplier={onRateMultiplier}
                 onAutoSyncRateMultiplier={onAutoSyncRateMultiplier}
                 onSyncRateMultiplier={onSyncRateMultiplier}
+                onToggleLock={onToggleLock}
                 onDelete={onDelete}
               />
             ))}
@@ -227,6 +230,7 @@ interface AccountRowProps {
   onRateMultiplier: (account: Account, multiplier: number) => void
   onAutoSyncRateMultiplier: (account: Account, enabled: boolean) => void
   onSyncRateMultiplier: (account: Account) => void
+  onToggleLock: (account: Account) => void
   onDelete: (account: Account) => void
 }
 
@@ -248,6 +252,7 @@ function AccountRow({
   onRateMultiplier,
   onAutoSyncRateMultiplier,
   onSyncRateMultiplier,
+  onToggleLock,
   onDelete,
 }: AccountRowProps) {
   const oauth = account.account_type === 'oauth'
@@ -271,7 +276,10 @@ function AccountRow({
   return (
     <tr>
       <td className="col-account">
-        <div className="account-name" data-tooltip={account.name || undefined}>{account.name || '未命名'}</div>
+        <div className="account-name" data-tooltip={account.name || undefined}>
+          {account.name || '未命名'}
+          {account.locked && <span className="account-lock-badge" data-tooltip="已锁定，批量移除报错上游时保留" aria-label="已锁定"><Lock size={11} /></span>}
+        </div>
         {parsedErr ? (
           <div
             className="account-detail account-error error-tip-wrap error-structured"
@@ -404,6 +412,18 @@ function AccountRow({
             aria-label="编辑账号"
           >
             <Pencil size={16} />
+          </button>
+          <button
+            className="icon-btn"
+            onClick={() => onToggleLock(account)}
+            disabled={busyActions.has(`lock:${account.id}`)}
+            data-tooltip={account.locked ? '解锁账号' : '锁定账号（批量移除报错上游时保留）'}
+            aria-label={account.locked ? '解锁账号' : '锁定账号'}
+            aria-pressed={account.locked}
+          >
+            {busyActions.has(`lock:${account.id}`)
+              ? <RefreshCw className="spin" size={16} />
+              : account.locked ? <Unlock size={16} /> : <Lock size={16} />}
           </button>
           <button
             className="icon-btn"

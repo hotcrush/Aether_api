@@ -40,6 +40,53 @@
   min-width: 102px;
 }
 
+.market-refresh-progress {
+  display: grid;
+  gap: 5px;
+  margin: -4px 0 12px;
+  padding: 7px 9px;
+  border: 1px solid #d9e5f2;
+  border-radius: 7px;
+  background: #f5f9fd;
+  color: #48637c;
+  font-size: 10px;
+}
+
+.market-refresh-progress-head {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.market-refresh-progress-head strong {
+  color: #315f9e;
+  font-weight: 750;
+}
+
+.market-refresh-progress-shop {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.market-refresh-progress-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dfe8f1;
+}
+
+.market-refresh-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #4f86c6;
+  transition: width 180ms ease;
+}
+
 .market-feedback {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

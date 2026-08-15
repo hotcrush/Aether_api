@@ -22,6 +22,26 @@ fn stores_and_updates_account_priority() {
 }
 
 #[test]
+fn stores_account_lock_and_preserves_it_on_reimport() {
+    let db = Db::new(Path::new(":memory:")).unwrap();
+    let imported = NewAccount {
+        name: "Protected upstream".to_string(),
+        account_type: "api_key".to_string(),
+        api_key: "sk-protected".to_string(),
+        base_url: "https://relay.example/v1".to_string(),
+        ..NewAccount::default()
+    };
+    let (account, _) = db.upsert_account(&imported).unwrap();
+    assert!(!account.locked);
+    assert!(db.set_locked(&account.id, true).unwrap());
+    assert!(db.get_account(&account.id).unwrap().unwrap().locked);
+
+    let (reimported, action) = db.upsert_account(&imported).unwrap();
+    assert_eq!(action, UpsertAction::Updated);
+    assert!(reimported.locked);
+}
+
+#[test]
 fn edits_existing_relay_and_keeps_secret_when_omitted() {
     let db = Db::new(Path::new(":memory:")).unwrap();
     let (account, _) = db
@@ -408,6 +428,12 @@ fn request_logs_are_sanitized_and_aggregated_for_monitoring() {
         "rate limited",
     )
     .unwrap();
+
+    let (window_requests, window_tokens, window_cost) =
+        db.account_usage_since(&account.id, 0).unwrap();
+    assert_eq!(window_requests, 1);
+    assert_eq!(window_tokens, 150);
+    assert!((window_cost - 0.001).abs() < f64::EPSILON);
 
     let page = db.list_request_logs(RequestLogQuery::default()).unwrap();
     assert_eq!(page.items.len(), 4);

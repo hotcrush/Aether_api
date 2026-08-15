@@ -2,6 +2,7 @@ mod accounts;
 mod clipboard;
 mod codex;
 mod logs;
+mod pickup;
 mod proxy_settings;
 mod runtime;
 mod state;

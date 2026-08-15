@@ -205,3 +205,12 @@ pub struct MarketRefreshResult {
     pub message: Option<String>,
     pub snapshot: MarketSnapshot,
 }
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketRefreshProgress {
+    pub completed: usize,
+    pub total: usize,
+    pub shop_token: Option<String>,
+    pub shop_name: Option<String>,
+}

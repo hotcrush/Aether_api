@@ -73,6 +73,18 @@ pub(crate) fn set_account_status(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub(crate) fn set_account_locked(
+    state: tauri::State<AppState>,
+    id: String,
+    locked: bool,
+) -> Result<bool, String> {
+    state
+        .db
+        .set_locked(&id, locked)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct AccountUpdatePayload {
     name: String,

@@ -35,6 +35,7 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
         ("concurrency", "INTEGER NOT NULL DEFAULT 10"),
         ("rate_multiplier", "REAL NOT NULL DEFAULT 1.0"),
         ("auto_sync_rate_multiplier", "INTEGER NOT NULL DEFAULT 0"),
+        ("locked", "INTEGER NOT NULL DEFAULT 0"),
         ("last_error", "TEXT NOT NULL DEFAULT ''"),
         ("last_used_at", "TEXT"),
         ("request_count", "INTEGER NOT NULL DEFAULT 0"),

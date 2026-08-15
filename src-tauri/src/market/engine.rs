@@ -12,6 +12,7 @@ use reqwest::header::{
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -220,14 +221,35 @@ impl MarketState {
 
         // Fetch shops concurrently with bounded parallelism
         attempted_store_count = fetchable.len();
+        let progress_completed = Arc::new(AtomicUsize::new(0));
+        let _ = self.app.emit(
+            "market:refresh-progress",
+            super::types::MarketRefreshProgress {
+                completed: 0,
+                total: attempted_store_count,
+                shop_token: None,
+                shop_name: None,
+            },
+        );
         {
             use futures::stream::{self, StreamExt};
             let results: Vec<(MarketShop, Result<(MarketShop, Vec<MarketProduct>), String>)> =
                 stream::iter(fetchable.into_iter().map(|configured| {
                     let state = self;
                     let prot = Arc::clone(&shared_protection);
+                    let progress_completed = Arc::clone(&progress_completed);
                     async move {
                         let result = state.fetch_shop(configured.clone(), &prot).await;
+                        let completed = progress_completed.fetch_add(1, Ordering::Relaxed) + 1;
+                        let _ = state.app.emit(
+                            "market:refresh-progress",
+                            super::types::MarketRefreshProgress {
+                                completed,
+                                total: attempted_store_count,
+                                shop_token: Some(configured.token.clone()),
+                                shop_name: Some(configured.name.clone()),
+                            },
+                        );
                         (configured, result)
                     }
                 }))

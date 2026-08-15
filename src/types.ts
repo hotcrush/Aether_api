@@ -27,6 +27,7 @@ export interface Account {
   concurrency: number
   rate_multiplier: number
   auto_sync_rate_multiplier: boolean
+  locked: boolean
   status: AccountStatus
   last_error: string
   last_used_at: string | null
@@ -61,6 +62,46 @@ export interface ImageGenerationSettings {
   enabled: boolean
   base_url: string
   api_key: string
+}
+
+export interface PickupSettings {
+  customer_token: string
+}
+
+export interface PickupImportMessage {
+  index: number
+  name: string
+  message: string
+}
+
+export interface PickupImportResult {
+  total: number
+  created: number
+  updated: number
+  failed: number
+  errors: PickupImportMessage[]
+}
+
+export interface PickupOrderRecord {
+  idempotency_key: string
+  order_id: string
+  product: string
+  quantity: number
+  state: string
+  hold_total_fen: number | null
+  charged_fen: number | null
+  created_at: string
+  updated_at: string
+  response: Record<string, unknown> | null
+  import_attempted_at: string | null
+  import_result: PickupImportResult | null
+  import_error: string
+  last_error: string
+}
+
+export interface PickupOverview {
+  balance: Record<string, unknown>
+  inventory: Record<string, unknown>
 }
 
 export interface CodexClientSettings {
@@ -281,6 +322,13 @@ export interface AdditionalRateLimit {
   rate_limit: QuotaRateLimit | null
 }
 
+export interface LocalQuotaWindowUsage {
+  window: '5h' | '7d' | string
+  requests: number
+  tokens: number
+  api_equivalent_cost_usd: number
+}
+
 export interface AccountQuota {
   user_id: string
   account_id: string
@@ -293,11 +341,7 @@ export interface AccountQuota {
     available_count?: number | null
     credits?: { expires_at?: string | null }[] | null
   } | null
-  estimated_limit_usd?: number | null
-  estimated_limit_window?: '5h' | '7d' | string | null
-  estimated_sample_cost_usd?: number | null
-  estimated_sample_requests?: number | null
-  estimated_sample_used_percent?: number | null
+  local_window_usage?: LocalQuotaWindowUsage[]
 }
 
 export interface AccountQuotaResult {

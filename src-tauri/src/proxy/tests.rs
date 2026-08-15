@@ -177,6 +177,7 @@ fn scheduling_account(id: &str, priority: i64) -> Account {
         concurrency: 10,
         rate_multiplier: 1.0,
         auto_sync_rate_multiplier: false,
+        locked: false,
         chatgpt_account_id: String::new(),
         chatgpt_user_id: String::new(),
         email: String::new(),

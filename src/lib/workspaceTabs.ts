@@ -1,5 +1,6 @@
 export const INTERNAL_PAGE_IDS = [
   'upstreams',
+  'pickup',
   'monitor',
   'market',
   'logs',
@@ -47,6 +48,7 @@ export interface WorkspaceTabState {
 export type TabDropEdge = 'before' | 'after'
 
 const STORAGE_KEY = 'aether:workspace-tabs:v1'
+const STORAGE_VERSION = 2
 
 export function internalTabId(page: InternalPageId): InternalWorkspaceTab['id'] {
   return `internal:${page}`
@@ -79,7 +81,7 @@ export function saveWorkspaceTabState(state: WorkspaceTabState) {
       ? state.activeTabId
       : tabs[0]?.id
     if (!activeTabId) return
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, tabs, activeTabId }))
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, tabs, activeTabId }))
   } catch {
     // The workspace remains usable when storage is unavailable.
   }
@@ -207,7 +209,7 @@ export function activateWorkspaceTabAt(
 }
 
 function normalizeWorkspaceState(value: unknown): WorkspaceTabState | null {
-  if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.tabs)) return null
+  if (!isRecord(value) || ![1, STORAGE_VERSION].includes(value.version as number) || !Array.isArray(value.tabs)) return null
 
   const seen = new Set<string>()
   const tabs = value.tabs
@@ -220,6 +222,10 @@ function normalizeWorkspaceState(value: unknown): WorkspaceTabState | null {
     .slice(0, 24)
 
   if (!tabs.length) return null
+  if (value.version === 1 && !tabs.some((tab) => tab.id === internalTabId('pickup'))) {
+    const upstreamIndex = tabs.findIndex((tab) => tab.id === internalTabId('upstreams'))
+    tabs.splice(upstreamIndex < 0 ? 0 : upstreamIndex + 1, 0, createInternalTab('pickup'))
+  }
   const requestedActiveTabId = value.activeTabId === 'internal:codex'
     ? 'internal:settings'
     : value.activeTabId

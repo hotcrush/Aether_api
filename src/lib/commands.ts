@@ -20,6 +20,9 @@ import type {
   ImportResult,
   OpenAIAuthorization,
   OutboundProxySettings,
+  PickupOrderRecord,
+  PickupOverview,
+  PickupSettings,
   ProxyInfo,
   RelayUsageSummary,
   RequestLog,
@@ -52,6 +55,7 @@ let previewAccounts: Account[] = [
     concurrency: 10,
     rate_multiplier: 1,
     auto_sync_rate_multiplier: false,
+    locked: false,
     status: 'active',
     last_error: '',
     last_used_at: '今天 20:48',
@@ -77,6 +81,7 @@ let previewAccounts: Account[] = [
     concurrency: 6,
     rate_multiplier: 1,
     auto_sync_rate_multiplier: false,
+    locked: false,
     status: 'active',
     last_error: '',
     last_used_at: '昨天 18:20',
@@ -102,6 +107,7 @@ let previewAccounts: Account[] = [
     concurrency: 20,
     rate_multiplier: 1.2,
     auto_sync_rate_multiplier: true,
+    locked: false,
     status: 'active',
     last_error: '',
     last_used_at: '07-28 09:16',
@@ -127,6 +133,7 @@ let previewAccounts: Account[] = [
     concurrency: 4,
     rate_multiplier: 1,
     auto_sync_rate_multiplier: false,
+    locked: false,
     status: 'disabled',
     last_error: '上次测试：OAuth token 已失效',
     last_used_at: null,
@@ -137,6 +144,8 @@ let previewAccounts: Account[] = [
 ]
 
 let previewAccessToken = 'sk-local-cf4456e6195e4461957af12029f7cdfb'
+let previewPickupSettings: PickupSettings = { customer_token: 'cfk-preview-token' }
+let previewPickupOrders: PickupOrderRecord[] = []
 let previewCodexTakeoverActive = false
 let previewCodexHistoryBackupAvailable = false
 let previewCodexPromptState: CodexPromptState = {
@@ -413,11 +422,20 @@ function previewQuota(accountId: string): AccountQuota {
     email: account.email,
     plan_type: account.plan_type,
     fetched_at: fetchedAt,
-    estimated_limit_usd: accountId === 'oauth-pro' ? 138.6 : 61.4,
-    estimated_limit_window: '7d',
-    estimated_sample_cost_usd: accountId === 'oauth-pro' ? 51.84 : 49.73,
-    estimated_sample_requests: accountId === 'oauth-pro' ? 527 : 213,
-    estimated_sample_used_percent: accountId === 'oauth-pro' ? 37.4 : 81,
+    local_window_usage: [
+      {
+        window: '5h',
+        requests: accountId === 'oauth-pro' ? 83 : 41,
+        tokens: accountId === 'oauth-pro' ? 8_320_000 : 3_410_000,
+        api_equivalent_cost_usd: accountId === 'oauth-pro' ? 6.42 : 3.71,
+      },
+      {
+        window: '7d',
+        requests: accountId === 'oauth-pro' ? 527 : 213,
+        tokens: accountId === 'oauth-pro' ? 64_800_000 : 21_300_000,
+        api_equivalent_cost_usd: accountId === 'oauth-pro' ? 51.84 : 49.73,
+      },
+    ],
     rate_limit_reset_credits: accountId === 'oauth-pro'
       ? {
           available_count: 2,
@@ -567,6 +585,11 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       if (target) target.status = args?.status as AccountStatus
       return Boolean(target) as T
     }
+    case 'set_account_locked': {
+      const target = previewAccounts.find((account) => account.id === args?.id)
+      if (target) target.locked = Boolean(args?.locked)
+      return Boolean(target) as T
+    }
     case 'update_account': {
       const target = previewAccounts.find((account) => account.id === args?.id)
       const update = args?.update as AccountUpdate | undefined
@@ -628,6 +651,59 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     case 'update_image_generation_settings':
       window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}image-generation`, JSON.stringify(args?.settings))
       return args?.settings as T
+    case 'get_pickup_settings':
+      return { ...previewPickupSettings } as T
+    case 'update_pickup_settings':
+      previewPickupSettings = { ...(args?.settings as PickupSettings) }
+      return { ...previewPickupSettings } as T
+    case 'get_pickup_overview':
+      return {
+        balance: { balance_fen: 568, held_fen: 0, available_fen: 568, currency: 'CNY' },
+        inventory: {
+          product: 'team_1h',
+          quantity: Number(args?.quantity ?? 1),
+          available: 86,
+          estimated_unit_price_fen: 360,
+          estimated_total_fen: Number(args?.quantity ?? 1) * 360,
+          hold_total_fen: Number(args?.quantity ?? 1) * 360,
+        },
+      } as T
+    case 'list_pickup_orders':
+      return previewPickupOrders.map((order) => ({ ...order })) as T
+    case 'create_pickup_order': {
+      const key = String(args?.idempotencyKey ?? '')
+      const existing = previewPickupOrders.find((order) => order.idempotency_key === key)
+      if (existing) return { ...existing } as T
+      const now = new Date().toISOString()
+      const order: PickupOrderRecord = {
+        idempotency_key: key,
+        order_id: `preview-${crypto.randomUUID().slice(0, 8)}`,
+        product: 'team_1h',
+        quantity: Number(args?.quantity ?? 1),
+        state: 'completed',
+        hold_total_fen: Number(args?.quantity ?? 1) * 360,
+        charged_fen: Number(args?.quantity ?? 1) * 360,
+        created_at: now,
+        updated_at: now,
+        response: {},
+        import_attempted_at: now,
+        import_result: { total: Number(args?.quantity ?? 1), created: Number(args?.quantity ?? 1), updated: 0, failed: 0, errors: [] },
+        import_error: '',
+        last_error: '',
+      }
+      previewPickupOrders = [order, ...previewPickupOrders].slice(0, 8)
+      return { ...order } as T
+    }
+    case 'refresh_pickup_order': {
+      const target = previewPickupOrders.find((order) => order.order_id === args?.orderId)
+      if (!target) throw new Error('本地订单记录不存在')
+      return { ...target } as T
+    }
+    case 'retry_pickup_order_import': {
+      const target = previewPickupOrders.find((order) => order.order_id === args?.orderId)
+      if (!target) throw new Error('本地订单记录不存在')
+      return { ...target } as T
+    }
     case 'get_codex_client_settings':
       return JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}codex-client`) ?? '{"auto_sync_enabled":true,"effective_version":"0.147.0","synced_at":1786032000}') as T
     case 'update_codex_client_settings': {
@@ -836,7 +912,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return deleted as T
     }
     case 'get_app_version':
-      return { version: '0.1.0-alpha.20', commit: 'dev', build_time: '2026-08-14' } as T
+      return { version: '0.1.0-alpha.21', commit: 'dev', build_time: '2026-08-15' } as T
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }
@@ -876,6 +952,9 @@ export const openRelaySite = (id: string) =>
 export const setAccountStatus = (id: string, status: AccountStatus) =>
   call<boolean>('set_account_status', { id, status })
 
+export const setAccountLocked = (id: string, locked: boolean) =>
+  call<boolean>('set_account_locked', { id, locked })
+
 export const updateAccount = (id: string, update: AccountUpdate) =>
   call<Account>('update_account', { id, update })
 
@@ -912,6 +991,25 @@ export const getImageGenerationSettings = () =>
 
 export const updateImageGenerationSettings = (settings: ImageGenerationSettings) =>
   call<ImageGenerationSettings>('update_image_generation_settings', { settings })
+
+export const getPickupSettings = () => call<PickupSettings>('get_pickup_settings')
+
+export const updatePickupSettings = (settings: PickupSettings) =>
+  call<PickupSettings>('update_pickup_settings', { settings })
+
+export const getPickupOverview = (quantity: number) =>
+  call<PickupOverview>('get_pickup_overview', { quantity })
+
+export const listPickupOrders = () => call<PickupOrderRecord[]>('list_pickup_orders')
+
+export const createPickupOrder = (quantity: number, idempotencyKey: string) =>
+  call<PickupOrderRecord>('create_pickup_order', { quantity, idempotencyKey })
+
+export const refreshPickupOrder = (orderId: string) =>
+  call<PickupOrderRecord>('refresh_pickup_order', { orderId })
+
+export const retryPickupOrderImport = (orderId: string) =>
+  call<PickupOrderRecord>('retry_pickup_order_import', { orderId })
 
 export const getCodexClientSettings = () =>
   call<CodexClientSettings>('get_codex_client_settings')

@@ -1,0 +1,353 @@
+/* ── iOS-style visual layer ──
+ * Keep the existing component layout, but give every surface the same
+ * grouped, translucent and springy interaction language as modern iOS.
+ */
+
+body {
+  background:
+    radial-gradient(circle at 10% -8%, rgba(0, 122, 255, 0.055), transparent 34%),
+    radial-gradient(circle at 100% 0%, rgba(88, 86, 214, 0.045), transparent 30%),
+    var(--bg);
+}
+
+main {
+  padding-top: 24px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.app-header {
+  height: 46px;
+  border-bottom-color: var(--separator);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(24px) saturate(1.55);
+  -webkit-backdrop-filter: blur(24px) saturate(1.55);
+}
+
+.brand {
+  gap: 10px;
+}
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  flex-basis: 28px;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #0a84ff, #5856d6 78%);
+  box-shadow: 0 3px 10px rgba(0, 122, 255, 0.24);
+}
+
+.brand-name {
+  font-size: 13px;
+  letter-spacing: -0.02em;
+}
+
+.version-badge,
+.proxy-profile,
+.badge {
+  border-radius: 999px;
+}
+
+.workspace-tabs {
+  height: 44px;
+  flex-basis: 44px;
+  gap: 6px;
+  padding: 5px 12px 0;
+  border-bottom-color: var(--separator);
+  background: rgba(242, 242, 247, 0.82);
+  backdrop-filter: blur(22px) saturate(1.45);
+  -webkit-backdrop-filter: blur(22px) saturate(1.45);
+}
+
+.workspace-tab {
+  min-width: 108px;
+  height: 36px;
+  flex-basis: 164px;
+  border-radius: 11px 11px 0 0;
+}
+
+.workspace-tab.active {
+  border-color: var(--separator);
+  box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.74) inset;
+}
+
+.workspace-tab-main {
+  gap: 7px;
+  padding-right: 7px;
+  padding-left: 12px;
+  font-size: 12.5px;
+  transition: transform 180ms var(--ease-spring), color 160ms ease;
+}
+
+.workspace-tab-main:active {
+  transform: scale(0.97);
+}
+
+.workspace-tab-close,
+.workspace-tab-add,
+.workspace-tab-reload {
+  border-radius: 9px;
+}
+
+.workspace-tab-menu,
+.dropdown {
+  border-color: var(--separator);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  box-shadow: var(--shadow-popover);
+}
+
+.workspace-tab-menu-item,
+.menu-item {
+  min-height: 36px;
+  border-radius: 9px;
+}
+
+.btn {
+  min-height: 38px;
+  padding: 0 15px;
+  border-color: var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 650;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease,
+    transform 180ms var(--ease-spring), box-shadow 180ms ease;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: rgba(0, 122, 255, 0.3);
+  background: #fff;
+  box-shadow: 0 5px 14px rgba(0, 122, 255, 0.1);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.965);
+}
+
+.btn-primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  box-shadow: 0 4px 10px rgba(0, 122, 255, 0.2);
+}
+
+.btn-primary:hover:not(:disabled) {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+  box-shadow: 0 6px 16px rgba(0, 122, 255, 0.25);
+}
+
+.btn-danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  box-shadow: 0 4px 10px rgba(255, 59, 48, 0.18);
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  flex-basis: 32px;
+  border-radius: 9px;
+  color: var(--text-secondary);
+  transition: background 150ms ease, color 150ms ease, transform 180ms var(--ease-spring);
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.88);
+}
+
+.proxy-panel,
+.table-shell,
+.settings-group {
+  border-color: var(--separator);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.proxy-panel:hover,
+.settings-group:hover,
+.table-shell:hover {
+  box-shadow: var(--shadow-card-hover);
+}
+
+.page-drop-zone {
+  border-color: rgba(0, 122, 255, 0.3);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.62);
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms var(--ease-spring), box-shadow 180ms ease;
+}
+
+.page-drop-zone:hover {
+  border-color: rgba(0, 122, 255, 0.58);
+  background: rgba(255, 255, 255, 0.88);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(0, 122, 255, 0.08);
+}
+
+.search-box input,
+.field input,
+textarea,
+.auto-refresh-interval select,
+.cost-guard-fields input {
+  border-color: var(--border);
+  border-radius: 10px;
+  background: rgba(248, 248, 250, 0.9);
+}
+
+.search-box input:focus,
+.field input:focus,
+textarea:focus,
+.cost-guard-fields input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px var(--primary-soft);
+  outline: 0;
+}
+
+.segmented,
+.settings-segmented,
+.market-view-switch,
+.market-product-view-switch {
+  border-color: transparent;
+  border-radius: 11px;
+  background: #e5e5ea;
+}
+
+.segment,
+.settings-segmented button,
+.market-view-switch button,
+.market-product-view-switch button {
+  border-radius: 8px;
+  transition: background 160ms ease, color 160ms ease, box-shadow 180ms ease, transform 180ms var(--ease-spring);
+}
+
+.segment.active,
+.settings-segmented button.active,
+.market-view-switch button.active,
+.market-product-view-switch button.active {
+  box-shadow: 0 1px 4px rgba(31, 35, 41, 0.16);
+}
+
+.segment:active,
+.settings-segmented button:active,
+.market-view-switch button:active,
+.market-product-view-switch button:active {
+  transform: scale(0.96);
+}
+
+th {
+  height: 42px;
+  border-bottom-color: var(--separator);
+  background: rgba(247, 247, 250, 0.9);
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+td {
+  border-bottom-color: var(--separator);
+}
+
+tbody tr {
+  transition: background 160ms ease, transform 180ms var(--ease-spring);
+}
+
+tbody tr:hover {
+  background: rgba(0, 122, 255, 0.045);
+}
+
+.status-switch-track,
+.settings-toggle,
+.auto-refresh-switch,
+.market-setting-switch {
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px rgba(60, 60, 67, 0.08), inset 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.status-button.active .status-switch-track,
+.settings-toggle.on,
+.auto-refresh-toggle[aria-checked="true"] .auto-refresh-switch,
+.market-setting-toggle > input:checked + .market-setting-switch {
+  border-color: transparent;
+  background: var(--success);
+}
+
+.status-button.active {
+  color: #248a42;
+}
+
+.dialog {
+  border-color: rgba(60, 60, 67, 0.16);
+  border-radius: 20px;
+  box-shadow: 0 26px 80px rgba(31, 35, 41, 0.22), 0 3px 12px rgba(31, 35, 41, 0.08);
+  animation: dialog-in-ios 360ms var(--ease-spring) both;
+}
+
+.overlay {
+  background: rgba(28, 28, 30, 0.32);
+  backdrop-filter: blur(12px) saturate(1.1);
+  -webkit-backdrop-filter: blur(12px) saturate(1.1);
+}
+
+@keyframes dialog-in-ios {
+  from { opacity: 0; transform: translateY(12px) scale(0.965); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.dialog-head {
+  min-height: 58px;
+  border-bottom-color: var(--separator);
+}
+
+.dialog-foot {
+  border-top-color: var(--separator);
+  background: rgba(247, 247, 250, 0.86);
+}
+
+.toast {
+  min-height: 44px;
+  padding: 12px 16px;
+  border-color: rgba(52, 199, 89, 0.22);
+  border-radius: 14px;
+  background: rgba(247, 255, 249, 0.88);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: var(--shadow-popover);
+}
+
+.toast.error {
+  border-color: rgba(255, 59, 48, 0.22);
+  background: rgba(255, 247, 247, 0.9);
+}
+
+.empty-state {
+  border-color: var(--separator);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.workspace-view > main {
+  animation: page-in-ios 260ms var(--ease-out) both;
+}
+
+@keyframes page-in-ios {
+  from { opacity: 0.01; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

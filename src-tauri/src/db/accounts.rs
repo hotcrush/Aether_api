@@ -11,7 +11,7 @@ pub(super) fn query_active_accounts(conn: &Connection) -> SqlResult<Vec<Account>
                 client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                 expires_at, priority, models, weight, status, last_error, last_used_at,
                 request_count, created_at, updated_at, concurrency, rate_multiplier,
-                auto_sync_rate_multiplier
+                auto_sync_rate_multiplier, locked
            FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
     )?;
     let rows = stmt.query_map([], account_from_row)?;
@@ -25,7 +25,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier
+                    auto_sync_rate_multiplier, locked
                FROM accounts WHERE deleted_at IS NULL
               ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, priority, created_at DESC",
             [],
@@ -38,7 +38,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier
+                    auto_sync_rate_multiplier, locked
                FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
             [],
         )
@@ -56,7 +56,7 @@ impl Db {
                             client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                             expires_at, priority, models, weight, status, last_error, last_used_at,
                             request_count, created_at, updated_at, concurrency, rate_multiplier,
-                            auto_sync_rate_multiplier
+                            auto_sync_rate_multiplier, locked
                        FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
                 )?;
                 let rows = stmt.query_map([], account_from_row)?;
@@ -76,7 +76,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier
+                    auto_sync_rate_multiplier, locked
                FROM accounts WHERE id = ?1 AND deleted_at IS NULL",
             [id],
             account_from_row,
@@ -199,7 +199,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier
+                    auto_sync_rate_multiplier, locked
                FROM accounts WHERE id = ?1",
             [id],
             account_from_row,
@@ -271,7 +271,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier
+                    auto_sync_rate_multiplier, locked
                FROM accounts WHERE deleted_at IS NOT NULL
               ORDER BY deleted_at DESC",
             [],
@@ -305,6 +305,14 @@ impl Db {
         Ok(conn.execute(
             "UPDATE accounts SET status = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?2",
             rusqlite::params![status, id],
+        )? > 0)
+    }
+
+    pub fn set_locked(&self, id: &str, locked: bool) -> SqlResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute(
+            "UPDATE accounts SET locked = ?1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?2 AND deleted_at IS NULL",
+            rusqlite::params![locked, id],
         )? > 0)
     }
 
@@ -464,7 +472,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier
+                    auto_sync_rate_multiplier, locked
                FROM accounts
               WHERE status = 'active' AND deleted_at IS NULL
                 AND account_type = 'api_key' AND api_key <> '' AND base_url <> ''
@@ -569,6 +577,7 @@ fn account_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Account> {
             .filter(|multiplier| multiplier.is_finite() && (0.0..=100.0).contains(multiplier))
             .unwrap_or(1.0),
         auto_sync_rate_multiplier: row.get::<_, Option<bool>>(25)?.unwrap_or(false),
+        locked: row.get::<_, Option<bool>>(26)?.unwrap_or(false),
         status: row.get(17)?,
         last_error: row.get(18)?,
         last_used_at: row.get(19)?,

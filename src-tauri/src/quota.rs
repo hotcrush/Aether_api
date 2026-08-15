@@ -104,6 +104,14 @@ impl RateLimitResetCredits {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalQuotaWindowUsage {
+    pub window: String,
+    pub requests: i64,
+    pub tokens: i64,
+    pub api_equivalent_cost_usd: f64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QuotaUsage {
     #[serde(default, deserialize_with = "deserialize_null_default")]
@@ -120,16 +128,8 @@ pub struct QuotaUsage {
     pub rate_limit_reset_credits: Option<RateLimitResetCredits>,
     #[serde(default)]
     pub fetched_at: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub estimated_limit_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub estimated_limit_window: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub estimated_sample_cost_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub estimated_sample_requests: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub estimated_sample_used_percent: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_window_usage: Vec<LocalQuotaWindowUsage>,
 }
 
 impl QuotaUsage {
@@ -378,6 +378,7 @@ mod tests {
             concurrency: 10,
             rate_multiplier: 1.0,
             auto_sync_rate_multiplier: false,
+            locked: false,
             status: "active".to_string(),
             last_error: String::new(),
             last_used_at: None,
