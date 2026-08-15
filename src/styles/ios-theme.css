@@ -172,6 +172,300 @@ main {
   box-shadow: var(--shadow-card);
 }
 
+.proxy-panel,
+.settings-group,
+.logger-panel,
+.monitor-summary,
+.monitor-channel-card,
+.monitor-integrity-dialog,
+.codex-config,
+.codex-resources,
+.pickup-card,
+.pickup-metric,
+.market-product-card,
+.market-store-card,
+.market-chart-panel,
+.market-signal-list,
+.market-category-card,
+.market-alert-settings,
+.market-alert-history {
+  border-color: var(--separator);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  box-shadow: var(--shadow-card);
+}
+
+.logger-panel,
+.monitor-summary,
+.monitor-channel-card,
+.monitor-integrity-dialog,
+.codex-config,
+.codex-resources,
+.pickup-card,
+.pickup-metric,
+.market-product-card,
+.market-store-card,
+.market-chart-panel,
+.market-signal-list,
+.market-category-card,
+.market-alert-settings,
+.market-alert-history {
+  border-radius: 16px;
+}
+
+.monitor-channel-card,
+.market-product-card,
+.market-store-card,
+.market-category-card,
+.pickup-card,
+.pickup-metric {
+  transition: border-color 170ms ease, box-shadow 220ms ease,
+    transform 220ms var(--ease-spring), background 170ms ease;
+}
+
+.monitor-channel-card:hover,
+.market-product-card:hover,
+.market-store-card:hover,
+.market-category-card:hover,
+.pickup-card:hover,
+.pickup-metric:hover {
+  border-color: rgba(0, 122, 255, 0.22);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-2px);
+}
+
+.market-product-card:active,
+.market-store-card:active,
+.market-category-card:active,
+.monitor-channel-card:active {
+  transform: translateY(0) scale(0.992);
+}
+
+.logger-head,
+.monitor-hero,
+.market-hero,
+.pickup-header,
+.codex-config-head,
+.codex-resources-head {
+  border-color: var(--separator);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(247, 247, 250, 0.72));
+}
+
+.logger-title,
+.monitor-hero h1,
+.market-hero h1,
+.pickup-header h1,
+.codex-title,
+.settings-section-head h2 {
+  color: var(--text);
+  font-weight: 760;
+  letter-spacing: -0.035em;
+}
+
+.logger-subtitle,
+.monitor-hero p,
+.market-hero p,
+.pickup-header p,
+.codex-subtitle {
+  color: var(--text-secondary);
+}
+
+.logger-toolbar,
+.monitor-toolbar,
+.market-filter-bar,
+.market-product-toolbar,
+.market-analytics-toolbar {
+  border-color: var(--separator);
+  background: rgba(247, 247, 250, 0.78);
+  backdrop-filter: blur(16px) saturate(1.25);
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+}
+
+.logger-search,
+.monitor-search,
+.market-search-field,
+.market-filter-field,
+.pickup-form-row input,
+.pickup-form-row select,
+.codex-prompt-name,
+.codex-prompt-editor {
+  border-color: var(--border);
+  border-radius: 10px;
+  background: rgba(248, 248, 250, 0.9);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.logger-search:focus-within,
+.monitor-search:focus-within,
+.market-search-field:focus-within,
+.market-filter-field:focus-within,
+.pickup-form-row input:focus,
+.pickup-form-row select:focus,
+.codex-prompt-name:focus,
+.codex-prompt-editor:focus {
+  border-color: var(--primary);
+  background: #fff;
+  box-shadow: 0 0 0 4px var(--primary-soft);
+}
+
+.logger-list-head,
+.market-chart-panel > header,
+.market-signal-list > header,
+.market-category-card > header,
+.pickup-card-head,
+.codex-history-head,
+.codex-skills-toolbar {
+  border-color: var(--separator);
+  background: rgba(247, 247, 250, 0.82);
+}
+
+.logger-row,
+.market-alert-row,
+.market-signal-row,
+.pickup-order-row,
+.codex-detail-row,
+.codex-skill-row,
+.codex-prompt-item {
+  border-color: var(--separator);
+  transition: background 160ms ease, transform 180ms var(--ease-spring);
+}
+
+.logger-row:hover,
+.market-alert-row:hover,
+.market-signal-row:hover,
+.pickup-order-row:hover,
+.codex-detail-row:hover,
+.codex-skill-row:hover,
+.codex-prompt-item:hover {
+  background: rgba(0, 122, 255, 0.045);
+}
+
+.market-section-tabs,
+.market-price-tabs,
+.market-range-tabs,
+.market-filter-tabs,
+.market-product-view-tabs,
+.codex-resource-tabs,
+.monitor-window {
+  border-color: transparent;
+  border-radius: 11px;
+  background: #e5e5ea;
+}
+
+.market-section-tab,
+.market-price-tabs button,
+.market-range-tabs button,
+.market-filter-tabs button,
+.market-product-view-tabs button,
+.codex-resource-tabs button,
+.monitor-window button {
+  border-radius: 8px;
+  transition: background 160ms ease, color 160ms ease, box-shadow 180ms ease,
+    transform 180ms var(--ease-spring);
+}
+
+.market-section-tab.active,
+.market-price-tabs button.active,
+.market-range-tabs button.active,
+.market-filter-tabs button.active,
+.market-product-view-tabs button.active,
+.codex-resource-tabs button.active,
+.monitor-window button.active {
+  background: #fff;
+  color: var(--primary);
+  box-shadow: 0 1px 4px rgba(31, 35, 41, 0.16);
+}
+
+.market-section-tab:active,
+.market-price-tabs button:active,
+.market-range-tabs button:active,
+.market-filter-tabs button:active,
+.market-product-view-tabs button:active,
+.codex-resource-tabs button:active,
+.monitor-window button:active {
+  transform: scale(0.96);
+}
+
+.market-price-badge,
+.market-product-badge,
+.market-category-chip,
+.market-kind-chip,
+.logger-method,
+.logger-status,
+.logger-http-status,
+.pickup-order-status,
+.uw-badge,
+.error-label,
+.error-code-badge {
+  border-radius: 999px;
+}
+
+.usage-window-track,
+.relay-quota-track,
+.monitor-capacity-track,
+.market-refresh-progress-track {
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.16);
+}
+
+.usage-window-bar,
+.relay-quota-track > span,
+.monitor-capacity-line,
+.market-refresh-progress-track > span {
+  border-radius: 999px;
+}
+
+.market-refresh-progress {
+  border-color: rgba(0, 122, 255, 0.2);
+  border-radius: 14px;
+  background: rgba(0, 122, 255, 0.065);
+}
+
+.quota-query,
+.quota-refresh,
+.relay-inline-refresh,
+.market-icon-action,
+.market-page-button,
+.logger-refresh,
+.logger-clear,
+.monitor-probe,
+.monitor-integrity-trigger {
+  border-color: var(--border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.76);
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease,
+    transform 180ms var(--ease-spring), box-shadow 180ms ease;
+}
+
+.quota-query:hover,
+.quota-refresh:hover,
+.relay-inline-refresh:hover,
+.market-icon-action:hover,
+.market-page-button:hover,
+.logger-refresh:hover,
+.logger-clear:hover,
+.monitor-probe:hover,
+.monitor-integrity-trigger:hover {
+  border-color: rgba(0, 122, 255, 0.28);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.quota-query:active,
+.quota-refresh:active,
+.relay-inline-refresh:active,
+.market-icon-action:active,
+.market-page-button:active,
+.logger-refresh:active,
+.logger-clear:active,
+.monitor-probe:active,
+.monitor-integrity-trigger:active {
+  transform: scale(0.92);
+}
+
 .proxy-panel:hover,
 .settings-group:hover,
 .table-shell:hover {

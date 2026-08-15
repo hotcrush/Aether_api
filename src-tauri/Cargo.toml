@@ -1,6 +1,6 @@
 [package]
 name = "sub2api"
-version = "0.1.0-alpha.21"
+version = "0.1.1"
 edition = "2021"
 description = "Aether local OpenAI/Codex multi-upstream desktop gateway"
 homepage = "https://github.com/hotcrush/Aether_api"
