@@ -1099,3 +1099,56 @@ td,
 .codex-skill-list::-webkit-scrollbar-thumb {
   background: var(--fill-strong);
 }
+
+/* ── Rendering budget ──
+ * Keep blur on the app chrome and transient surfaces only. Repeated blur
+ * layers over long lists are much more expensive than a solid grouped card.
+ */
+.proxy-panel,
+.settings-group,
+.logger-panel,
+.monitor-summary,
+.monitor-channel-card,
+.monitor-integrity-dialog,
+.codex-config,
+.codex-resources,
+.pickup-card,
+.pickup-metric,
+.market-product-card,
+.market-store-card,
+.market-chart-panel,
+.market-signal-list,
+.market-category-card,
+.market-alert-settings,
+.market-alert-history {
+  background: var(--surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.logger-entry {
+  content-visibility: auto;
+  contain-intrinsic-size: 88px;
+}
+
+.market-product-row,
+.market-alert-row,
+.market-signal-row,
+.pickup-order-row,
+.codex-detail-row,
+.codex-skill-row,
+.codex-prompt-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 56px;
+}
+
+@media (max-width: 760px) {
+  .app-header,
+  .workspace-tabs,
+  .workspace-tab-menu,
+  .dropdown,
+  .dialog {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}

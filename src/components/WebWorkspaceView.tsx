@@ -1,5 +1,5 @@
 import { RefreshCw } from 'lucide-react'
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { syncWebviewTabs } from '../lib/webviewTabs'
 import type { WebWorkspaceTab, WorkspaceTab } from '../lib/workspaceTabs'
 
@@ -9,7 +9,7 @@ interface WebWorkspaceViewProps {
   onError: (message: string) => void
 }
 
-export function WebWorkspaceView({
+export const WebWorkspaceView = memo(function WebWorkspaceView({
   activeTab,
   tabs,
   onError,
@@ -94,4 +94,4 @@ export function WebWorkspaceView({
       )}
     </div>
   ) : null
-}
+})

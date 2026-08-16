@@ -702,7 +702,11 @@ export default function App() {
         .catch(() => undefined)
         .finally(() => { inFlight = false })
     }
-    const timer = window.setInterval(refreshProxyStats, 1000)
+    // Proxy counters are informational; polling every second forces the whole
+    // shell to reconcile even when the user is in another tab. Keep the active
+    // upstream page responsive while reducing background command traffic.
+    const intervalMs = activeTab === 'upstreams' ? 2_000 : 5_000
+    const timer = window.setInterval(refreshProxyStats, intervalMs)
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') refreshProxyStats()
     }
@@ -713,7 +717,7 @@ export default function App() {
       document.removeEventListener('visibilitychange', refreshWhenVisible)
       window.removeEventListener('focus', refreshProxyStats)
     }
-  }, [loadProxy])
+  }, [activeTab, loadProxy])
 
   useEffect(() => {
     if (activeTab !== 'monitor') return
@@ -1528,6 +1532,7 @@ export default function App() {
         onOpenSettings={() => {
           setTabState((current) => openInternalWorkspaceTab(current, 'settings'))
         }}
+        onOpenWebsite={() => openExternalWebTab('https://bugteam.team/', 'BugTeam 官网')}
         onAccountsImported={handlePickupImported}
       />
       ) : activeTab === 'logs' ? (

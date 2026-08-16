@@ -1,5 +1,5 @@
 import { ArrowRight, BadgeAlert, Eraser, RefreshCw, Search, ScrollText } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clearRequestLogs, listRequestLogs } from '../lib/commands'
 import { errorText } from '../lib/format'
 import { formatTime, parseLogTime } from '../lib/time'
@@ -49,6 +49,7 @@ export function LoggerPage() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null)
 
   const mountedRef = useRef(true)
+  const itemsRef = useRef<RequestLog[]>([])
   const requestSerialRef = useRef(0)
   const activeRequestRef = useRef<number | null>(null)
   const browsingHistoryRef = useRef(false)
@@ -98,12 +99,16 @@ export function LoggerPage() {
     try {
       const page = await listRequestLogs(baseQuery)
       if (!mountedRef.current || requestSerial !== requestSerialRef.current) return
-      setItems(page.items)
+      const itemsChanged = !areRequestLogsEqual(itemsRef.current, page.items)
+      if (itemsChanged) {
+        itemsRef.current = page.items
+        setItems(page.items)
+      }
       setHasMore(page.has_more)
       setNextBeforeId(page.next_before_id)
       setLoadError('')
       setFeedback('')
-      setLastUpdatedAt(Date.now())
+      if (itemsChanged || mode !== 'auto') setLastUpdatedAt(Date.now())
       if (mode !== 'auto') {
         browsingHistoryRef.current = false
         setBrowsingHistory(false)
@@ -123,6 +128,7 @@ export function LoggerPage() {
   useEffect(() => {
     browsingHistoryRef.current = false
     setBrowsingHistory(false)
+    itemsRef.current = []
     setItems([])
     setHasMore(false)
     setNextBeforeId(null)
@@ -166,7 +172,9 @@ export function LoggerPage() {
     try {
       const page = await listRequestLogs({ ...baseQuery, before_id: nextBeforeId })
       if (!mountedRef.current || requestSerial !== requestSerialRef.current) return
-      setItems((current) => mergeRequestLogs(current, page.items))
+      const merged = mergeRequestLogs(itemsRef.current, page.items)
+      itemsRef.current = merged
+      setItems(merged)
       setHasMore(page.has_more)
       setNextBeforeId(page.next_before_id)
       setLoadError('')
@@ -203,6 +211,7 @@ export function LoggerPage() {
     try {
       const deleted = await clearRequestLogs()
       if (!mountedRef.current || requestSerial !== requestSerialRef.current) return
+      itemsRef.current = []
       setItems([])
       setHasMore(false)
       setNextBeforeId(null)
@@ -373,7 +382,7 @@ export function LoggerPage() {
   )
 }
 
-function LoggerRow({ item }: { item: RequestLog }) {
+const LoggerRow = memo(function LoggerRow({ item }: { item: RequestLog }) {
   const time = parseLogTime(item.created_at)
   const accountName = item.account_name || (item.account_id ? '未命名上游' : '本地路由')
   const accountType = item.account_type === 'oauth'
@@ -454,7 +463,7 @@ function LoggerRow({ item }: { item: RequestLog }) {
       )}
     </li>
   )
-}
+})
 
 function LoggerState({
   icon,
@@ -479,6 +488,41 @@ function mergeRequestLogs(current: RequestLog[], incoming: RequestLog[]) {
   for (const item of current) logs.set(item.id, item)
   for (const item of incoming) logs.set(item.id, item)
   return [...logs.values()].sort((left, right) => right.id - left.id)
+}
+
+function areRequestLogsEqual(current: RequestLog[], next: RequestLog[]) {
+  if (current.length !== next.length) return false
+  for (let index = 0; index < current.length; index += 1) {
+    const left = current[index]
+    const right = next[index]
+    if (
+      left.id !== right.id
+      || left.request_id !== right.request_id
+      || left.attempt_index !== right.attempt_index
+      || left.account_id !== right.account_id
+      || left.account_name !== right.account_name
+      || left.status !== right.status
+      || left.http_status !== right.http_status
+      || left.transport !== right.transport
+      || left.outbound_proxy !== right.outbound_proxy
+      || left.model !== right.model
+      || left.upstream_response_model !== right.upstream_response_model
+      || left.model_mismatch !== right.model_mismatch
+      || left.ttfb_ms !== right.ttfb_ms
+      || left.duration_ms !== right.duration_ms
+      || left.input_tokens !== right.input_tokens
+      || left.output_tokens !== right.output_tokens
+      || left.cached_tokens !== right.cached_tokens
+      || left.cache_write_tokens !== right.cache_write_tokens
+      || left.reasoning_tokens !== right.reasoning_tokens
+      || left.total_tokens !== right.total_tokens
+      || left.unpriced_tokens !== right.unpriced_tokens
+      || left.estimated_cost !== right.estimated_cost
+      || left.message !== right.message
+      || left.created_at !== right.created_at
+    ) return false
+  }
+  return true
 }
 
 function formatDuration(value: number | null) {

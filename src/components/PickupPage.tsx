@@ -12,12 +12,13 @@ import type { PickupImportResult, PickupOrderRecord, PickupOverview, PickupSetti
 
 interface PickupPageProps {
   onOpenSettings: () => void
+  onOpenWebsite: () => void
   onAccountsImported?: (result: PickupImportResult) => void
 }
 
 const PENDING_ORDER_KEY = 'aether:pickup-pending-order:v1'
 
-export function PickupPage({ onOpenSettings, onAccountsImported }: PickupPageProps) {
+export function PickupPage({ onOpenSettings, onOpenWebsite, onAccountsImported }: PickupPageProps) {
   const [settings, setSettings] = useState<PickupSettings | null>(null)
   const [overview, setOverview] = useState<PickupOverview | null>(null)
   const [orders, setOrders] = useState<PickupOrderRecord[]>([])
@@ -149,9 +150,14 @@ export function PickupPage({ onOpenSettings, onAccountsImported }: PickupPagePro
           <h1><PackagePlus size={21} aria-hidden="true" /> Team 取号</h1>
           <p>从 sub2api 领取 Team 账号，完成后自动导入 Aether。</p>
         </div>
-        <button className="btn" type="button" onClick={() => { void loadPage() }} disabled={loading || refreshing}>
-          <RefreshCw size={14} className={loading || refreshing ? 'spin' : ''} /> 刷新
-        </button>
+        <div className="pickup-header-actions">
+          <button className="btn" type="button" onClick={onOpenWebsite}>
+            <ExternalLink size={14} /> 官网
+          </button>
+          <button className="btn" type="button" onClick={() => { void loadPage() }} disabled={loading || refreshing}>
+            <RefreshCw size={14} className={loading || refreshing ? 'spin' : ''} /> 刷新
+          </button>
+        </div>
       </header>
 
       {!settings?.customer_token && !loading && (
