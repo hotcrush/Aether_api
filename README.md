@@ -2,7 +2,7 @@
 
 Aether 是一款面向个人开发者的 Windows 本地 OpenAI/Codex 多上游桌面网关。它把 **OpenAI/Codex OAuth 账号池**与 **OpenAI 兼容 API Key 中转站**放进同一个调度池，向 Codex 和其他 OpenAI 兼容客户端提供稳定的本地 API 入口。
 
-Aether 同时提供上游管理、Team 取号、Codex 配置接管、渠道监控、请求日志、链动小铺市场监控、系统通知和应用内网页标签页。当前版本为 `0.1.0`，仍处于早期测试阶段，配置格式和交互可能继续调整。
+Aether 同时提供上游管理、Team 取号、Codex 配置接管、渠道监控、请求日志、链动小铺市场监控、系统通知和应用内网页标签页。当前版本为 `0.1.2`，仍处于早期测试阶段，配置格式和交互可能继续调整。
 
 > Aether 聚焦个人本机使用，不是公网中转站、计费平台或多租户 SaaS。当前发布流程只构建 Windows x64 NSIS 安装包；macOS/Linux 兼容性尚未完成验证。
 
@@ -121,7 +121,7 @@ curl.exe "http://127.0.0.1:9090/v1/models" `
 | 每日预算 | 设置全局每日 USD 参考预算，并显示当天估算消费和剩余金额 | 仅作参考展示；超出后剩余显示为 0，不会自动停用账号、阻断请求或按预算选站 |
 | 请求日志与监控 | 真实请求尝试、手动 Models 检测、API Key 中转站模型验真、24h/7d 汇总、30 天日志保留 | 不在后台定时发送额外付费模型请求；验模是黑盒风险检测，不是模型身份的绝对证明 |
 | Codex 生态 | Provider 接管/恢复、会话 Provider 统一、提示词预设、Skills 启停、备份账本 | 会读写当前用户的 Codex 配置、`AGENTS.md`、Skills、JSONL 会话和状态数据库 |
-| OAuth 设备指纹收敛 | 重写 Codex 身份字段（installation/session/thread/turn/window），可选关闭/设备/会话/完全四档 | 默认按会话隔离线程；仅作用于 OAuth 账号的 Responses 请求 |
+| OAuth 设备指纹收敛 | 重写 Codex 身份字段（installation/session/thread/turn/window），并隔离 `x-codex-turn-state` 会话状态，可选关闭/设备/会话/完全四档 | 默认关闭；显式选择档位后才收敛；账号级随机种子持久化，避免不同实例因本地账号 ID 相同而撞指纹；仅作用于 OAuth 账号的 Responses 请求 |
 | 图片生成 | 独立图片生成上游（Base URL + API Key），识别 `image_generation` 工具并把图片请求路由到专用上游 | 图片请求仅转发到该上游，不参与普通账号池调度；默认直连官方 OpenAI |
 | 应用内网页 | 中转站、市场商品/店铺和网页新窗口在内部 Tab 打开 | 仅支持 HTTP(S)；网页 Tab 重启后不恢复；没有地址栏及前进、后退、刷新工具栏 |
 | 市场监控 | 链动小铺商品/店铺采集、比价、行情、事件和桌面通知 | 当前只支持 `liandx/ldxp`；分类和价格信号属于本地规则，不构成商品鉴定或购买建议 |
@@ -426,7 +426,7 @@ WebView Tab 的下载会写入系统下载目录并在界面显示下载状态�
 - “设置”页可以启用 Windows 登录后的开机自启动。
 - “设置 → 出站代理”默认提供 `http://127.0.0.1:7890`，支持 HTTP、HTTPS、SOCKS5/SOCKS5H，并会立即切换 Aether 的 OpenAI/上游出站请求；后端 TCP/DNS 建连与 TLS 握手各有 10 秒上限，内置 OAuth 授权页支持 HTTP、SOCKS5/SOCKS5H。
 - “设置 → 成本保护”开启后，路由会跳过成本倍率高于“最高成本倍率 × (1 − 安全缓冲)”的渠道；默认关闭。
-- “设置 → Codex 出站身份”每 6 小时同步官方 Codex 稳定版，并可配置 OAuth 设备指纹收敛（关闭/设备/会话/完全，默认按会话隔离线程）。
+- “设置 → Codex 出站身份”每 6 小时同步官方 Codex 稳定版，并可配置 OAuth 设备指纹收敛（关闭/设备/会话/完全，默认关闭）。
 - “设置 → 图片生成上游”可配置独立的图片生成 Base URL 与 API Key，识别 Codex 对话内的 `image_generation` 工具后走专用上游。
 - “设置 → Team 取号”保存取号服务 Customer Token。
 - 设置页显示版本、commit 和构建时间，并提供 Codex 提示词/Skills、回收站和反馈邮件模板入口。

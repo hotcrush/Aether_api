@@ -379,6 +379,7 @@ mod tests {
             rate_multiplier: 1.0,
             auto_sync_rate_multiplier: false,
             locked: false,
+            codex_fingerprint_seed: String::new(),
             status: "active".to_string(),
             last_error: String::new(),
             last_used_at: None,

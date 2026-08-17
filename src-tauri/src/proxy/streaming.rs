@@ -905,16 +905,21 @@ pub(super) fn is_transient_load_shed_message(message: &str) -> bool {
 }
 
 pub(super) fn completed_response_from_sse(text: &str) -> Option<Value> {
-    let mut completed = None;
-    for line in text.lines() {
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
+    // SSE data fields may be split across multiple lines and streams can
+    // contain transport bytes after the first terminal event. Codex treats
+    // that first terminal as authoritative, so do the same here.
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    for event in normalized.split("\n\n") {
+        let payload = event
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let payload = payload.trim();
+        if payload.is_empty() || payload == "[DONE]" {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(data) else {
+        let Ok(value) = serde_json::from_str::<Value>(payload) else {
             continue;
         };
         if matches!(
@@ -927,10 +932,10 @@ pub(super) fn completed_response_from_sse(text: &str) -> Option<Value> {
                     | "response.canceled"
             )
         ) {
-            completed = value.get("response").cloned().or(Some(value));
+            return value.get("response").cloned().or(Some(value));
         }
     }
-    completed
+    None
 }
 
 pub(super) fn filtered_response_headers(headers: &reqwest::header::HeaderMap) -> HeaderMap {

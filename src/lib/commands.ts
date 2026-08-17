@@ -719,7 +719,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return next as T
     }
     case 'get_codex_fingerprint_settings':
-      return JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}codex-fingerprint`) ?? '{"mode":"session"}') as T
+      return JSON.parse(window.localStorage.getItem(`${PREVIEW_CACHE_PREFIX}codex-fingerprint`) ?? '{"mode":"off"}') as T
     case 'update_codex_fingerprint_settings':
       window.localStorage.setItem(`${PREVIEW_CACHE_PREFIX}codex-fingerprint`, JSON.stringify(args?.settings))
       return args?.settings as T
@@ -912,7 +912,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       return deleted as T
     }
     case 'get_app_version':
-      return { version: '0.1.1', commit: 'dev', build_time: '2026-08-16' } as T
+      return { version: '0.1.2', commit: 'dev', build_time: '2026-08-17' } as T
     default:
       throw new Error(`Unsupported preview command: ${command}`)
   }

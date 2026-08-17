@@ -117,6 +117,17 @@ td.col-status {
   vertical-align: -2px;
 }
 
+.account-cooldown-badge {
+  display: inline-flex;
+  margin-left: 6px;
+  align-items: center;
+  gap: 3px;
+  color: #95631a;
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: -1px;
+}
+
 .account-detail,
 .usage-label {
   margin-top: 4px;

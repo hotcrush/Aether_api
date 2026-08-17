@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clearRequestLogs, listRequestLogs } from '../lib/commands'
 import { errorText } from '../lib/format'
 import { formatTime, parseLogTime } from '../lib/time'
-import type { RequestLog, RequestLogQuery, RequestLogStatus } from '../types'
+import type { Account, RequestLog, RequestLogQuery, RequestLogStatus } from '../types'
 
 const PAGE_SIZE = 100
 const AUTO_REFRESH_INTERVAL_MS = 2_000
@@ -30,9 +30,20 @@ const STATUS_LABELS: Record<RequestLogStatus, string> = {
   cancelled: '已取消',
 }
 
-export function LoggerPage() {
+function accountLabel(account: Account) {
+  const name = account.name || account.email || account.chatgpt_account_id || account.id
+  const type = account.account_type === 'oauth' ? 'OAuth' : '中转站'
+  return `${name}（${type}）`
+}
+
+interface LoggerPageProps {
+  accounts: Account[]
+}
+
+export function LoggerPage({ accounts }: LoggerPageProps) {
   const [items, setItems] = useState<RequestLog[]>([])
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [accountFilter, setAccountFilter] = useState('all')
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [modelMismatchOnly, setModelMismatchOnly] = useState(false)
@@ -78,10 +89,11 @@ export function LoggerPage() {
 
   const baseQuery = useMemo<RequestLogQuery>(() => ({
     status: statusFilter === 'all' ? undefined : statusFilter,
+    account_id: accountFilter === 'all' ? undefined : accountFilter,
     search: search || undefined,
     model_mismatch_only: modelMismatchOnly,
     limit: PAGE_SIZE,
-  }), [modelMismatchOnly, search, statusFilter])
+  }), [accountFilter, modelMismatchOnly, search, statusFilter])
 
   const loadFirstPage = useCallback(async (mode: LoadMode) => {
     if (mode === 'auto' && activeRequestRef.current !== null) return
@@ -235,6 +247,7 @@ export function LoggerPage() {
     () => new Set(items.map((item) => item.request_id)).size,
     [items],
   )
+  const groups = useMemo(() => groupRequestLogs(items), [items])
   const controlsBusy = loading || refreshing || loadingMore || clearBusy
 
   return (
@@ -292,6 +305,24 @@ export function LoggerPage() {
             />
           </label>
           <div className="logger-filter-group">
+            <label className="logger-account-filter">
+              <select
+                value={accountFilter}
+                onChange={(event) => {
+                  disarmClear()
+                  setFeedback('')
+                  setAccountFilter(event.target.value)
+                }}
+                aria-label="按上游筛选"
+              >
+                <option value="all">全部上游</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {accountLabel(account)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="logger-status-filters" role="group" aria-label="按日志状态筛选">
               {STATUS_FILTERS.map((option) => (
                 <button
@@ -356,7 +387,9 @@ export function LoggerPage() {
             />
           ) : (
             <ol className="logger-items">
-              {items.map((item) => <LoggerRow key={item.id} item={item} />)}
+              {groups.map((group) => (
+                <LoggerRow key={group.requestId} item={group.latest} attemptTotal={group.total} />
+              ))}
             </ol>
           )}
         </div>
@@ -382,7 +415,7 @@ export function LoggerPage() {
   )
 }
 
-const LoggerRow = memo(function LoggerRow({ item }: { item: RequestLog }) {
+const LoggerRow = memo(function LoggerRow({ item, attemptTotal }: { item: RequestLog; attemptTotal: number }) {
   const time = parseLogTime(item.created_at)
   const accountName = item.account_name || (item.account_id ? '未命名上游' : '本地路由')
   const accountType = item.account_type === 'oauth'
@@ -398,6 +431,7 @@ const LoggerRow = memo(function LoggerRow({ item }: { item: RequestLog }) {
     item.reasoning_tokens > 0 ? `推理 ${item.reasoning_tokens.toLocaleString()}` : null,
     item.unpriced_tokens > 0 ? `未计价 ${item.unpriced_tokens.toLocaleString()}` : null,
   ].filter(Boolean).join('；')
+  const pipelineOpen = item.http_status !== null
 
   return (
     <li className={`logger-entry status-${item.status}`}>
@@ -428,7 +462,7 @@ const LoggerRow = memo(function LoggerRow({ item }: { item: RequestLog }) {
                 {item.upstream_response_model}
               </span>
             )}
-            <span>尝试 #{Math.max(0, item.attempt_index)}</span>
+            <span>尝试 {attemptTotal > 1 ? `${Math.max(1, item.attempt_index)}/${attemptTotal}` : `#${Math.max(0, item.attempt_index)}`}</span>
             <span className="logger-request-id" data-tooltip={item.request_id}>{shortRequestId(item.request_id)}</span>
           </div>
         </div>
@@ -446,6 +480,17 @@ const LoggerRow = memo(function LoggerRow({ item }: { item: RequestLog }) {
           <span className="logger-http-status">
             {item.http_status === null ? 'HTTP —' : `HTTP ${item.http_status}`}
           </span>
+          {item.status === 'pending' && (
+            <span
+              className={`logger-pipeline${pipelineOpen ? ' open' : ' connecting'}`}
+              data-tooltip={pipelineOpen
+                ? `${transportLabel(item.transport)} 管道已建立，正在传输`
+                : `${transportLabel(item.transport)} 管道正在建立连接`}
+            >
+              <span aria-hidden="true" />
+              {pipelineOpen ? '管道已通' : '管道建立中'}
+            </span>
+          )}
         </div>
 
         <div className="logger-performance">
@@ -488,6 +533,28 @@ function mergeRequestLogs(current: RequestLog[], incoming: RequestLog[]) {
   for (const item of current) logs.set(item.id, item)
   for (const item of incoming) logs.set(item.id, item)
   return [...logs.values()].sort((left, right) => right.id - left.id)
+}
+
+interface RequestLogGroup {
+  requestId: string
+  latest: RequestLog
+  total: number
+}
+
+function groupRequestLogs(items: RequestLog[]): RequestLogGroup[] {
+  const map = new Map<string, RequestLog[]>()
+  for (const item of items) {
+    const list = map.get(item.request_id)
+    if (list) list.push(item)
+    else map.set(item.request_id, [item])
+  }
+  const groups: RequestLogGroup[] = []
+  for (const [requestId, list] of map) {
+    list.sort((left, right) => right.id - left.id)
+    groups.push({ requestId, latest: list[0], total: list.length })
+  }
+  groups.sort((left, right) => right.latest.id - left.latest.id)
+  return groups
 }
 
 function areRequestLogsEqual(current: RequestLog[], next: RequestLog[]) {

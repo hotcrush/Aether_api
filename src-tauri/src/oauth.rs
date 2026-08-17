@@ -360,6 +360,7 @@ pub async fn refresh_new_account(
         plan_type: fallback(metadata.plan_type, &account.plan_type),
         expires_at: metadata.expires_at.or(account.expires_at),
         priority: account.priority,
+        codex_fingerprint_seed: account.codex_fingerprint_seed.clone(),
         ..NewAccount::default()
     })
 }

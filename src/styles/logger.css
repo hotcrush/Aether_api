@@ -175,6 +175,35 @@
   color: var(--danger);
 }
 
+.logger-account-filter {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+}
+
+.logger-account-filter select {
+  height: 34px;
+  max-width: 240px;
+  padding: 0 26px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.logger-account-filter select:hover {
+  border-color: #aeb9c2;
+}
+
+.logger-account-filter select:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
 .logger-status-filters button {
   height: 26px;
   padding: 0 9px;
@@ -429,6 +458,44 @@
 .logger-status.status-cancelled {
   background: #eff2f4;
   color: #687580;
+}
+
+.logger-pipeline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.logger-pipeline > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.logger-pipeline.open {
+  color: #17755c;
+}
+
+.logger-pipeline.open > span {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+}
+
+.logger-pipeline.connecting {
+  color: #95631a;
+}
+
+.logger-pipeline.connecting > span {
+  background: #f59e0b;
+  animation: logger-pipeline-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes logger-pipeline-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 .logger-performance span:first-child {

@@ -211,7 +211,12 @@ fn account_from_classified_value(
         ];
         credentials.retain(|field, _| ALLOWED_CREDENTIAL_FIELDS.contains(&field.as_str()));
         if let Some(extra) = object.get_mut("extra").and_then(Value::as_object_mut) {
-            extra.retain(|field, _| field == "upstream_billing_rate_sync_enabled");
+            extra.retain(|field, _| {
+                matches!(
+                    field.as_str(),
+                    "upstream_billing_rate_sync_enabled" | "codex_fingerprint_seed"
+                )
+            });
         }
     }
 
@@ -565,6 +570,17 @@ fn account_from_value(value: Value) -> Result<NewAccount, String> {
     .filter(|value| !value.is_null())
     .map(parse_bool)
     .transpose()?;
+    let codex_fingerprint_seed = first_value(
+        &value,
+        &[
+            &["codex_fingerprint_seed"],
+            &["extra", "codex_fingerprint_seed"],
+        ],
+    )
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|seed| !seed.is_empty())
+    .map(str::to_string);
 
     let name = first_string(
         &value,
@@ -584,6 +600,7 @@ fn account_from_value(value: Value) -> Result<NewAccount, String> {
             concurrency,
             rate_multiplier,
             auto_sync_rate_multiplier,
+            codex_fingerprint_seed,
             base_url: first_string(
                 &value,
                 &[&["credentials", "base_url"], &["base_url"], &["baseUrl"]],
@@ -751,6 +768,7 @@ fn account_from_value(value: Value) -> Result<NewAccount, String> {
         models,
         weight,
         concurrency,
+        codex_fingerprint_seed,
         ..NewAccount::default()
     })
 }

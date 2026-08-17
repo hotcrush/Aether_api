@@ -2,7 +2,7 @@ use super::clipboard::ClipboardImportState;
 use super::proxy_settings::{configured_proxy_port, proxy_profile};
 use super::vault::VaultState;
 use super::AppState;
-use crate::capacity::CapacityRegistry;
+use crate::capacity::{CapacityRegistry, CooldownRegistry};
 use crate::cost_guard;
 use crate::db::Db;
 use crate::market::MarketState;
@@ -75,6 +75,7 @@ pub(crate) fn run() {
             let access_token = Arc::new(arc_swap::ArcSwap::new(Arc::new(access_token)));
             let proxy_running = Arc::new(AtomicBool::new(false));
             let capacity = Arc::new(CapacityRegistry::default());
+            let cooldown_state = Arc::new(CooldownRegistry::default());
             let openai_callback_ready = Arc::new(AtomicBool::new(false));
             let cost_guard = Arc::new(arc_swap::ArcSwap::new(Arc::new(cost_guard::load(&db))));
             let outbound_proxy_settings = outbound_proxy::load(&db);
@@ -117,6 +118,7 @@ pub(crate) fn run() {
             let proxy_token = Arc::clone(&access_token);
             let proxy_status = Arc::clone(&proxy_running);
             let proxy_capacity = Arc::clone(&capacity);
+            let proxy_cooldown_state = Arc::clone(&cooldown_state);
             let proxy_cost_guard = Arc::clone(&cost_guard);
             let proxy_image_generation = Arc::clone(&image_generation);
             let proxy_client = Arc::clone(&proxy_http_client);
@@ -130,6 +132,7 @@ pub(crate) fn run() {
                     proxy_token,
                     proxy_status,
                     proxy_capacity,
+                    proxy_cooldown_state,
                     proxy_cost_guard,
                     proxy_image_generation,
                     proxy_client,
@@ -158,6 +161,7 @@ pub(crate) fn run() {
                 proxy_port,
                 proxy_profile,
                 capacity,
+                cooldown_state,
                 cost_guard,
                 oauth_sessions: crate::oauth::OpenAIOAuthSessions::default(),
                 openai_callback_ready: Arc::clone(&openai_callback_ready),

@@ -1,5 +1,5 @@
 use super::clipboard::ClipboardImportState;
-use crate::capacity::CapacityRegistry;
+use crate::capacity::{CapacityRegistry, CooldownRegistry};
 use crate::codex_fingerprint::CodexFingerprintSettings;
 use crate::cost_guard::CostGuardSettings;
 use crate::db::Db;
@@ -23,6 +23,7 @@ pub struct AppState {
     pub proxy_port: u16,
     pub proxy_profile: &'static str,
     pub capacity: Arc<CapacityRegistry>,
+    pub cooldown_state: Arc<CooldownRegistry>,
     pub cost_guard: Arc<ArcSwap<CostGuardSettings>>,
     pub oauth_sessions: OpenAIOAuthSessions,
     pub openai_callback_ready: Arc<AtomicBool>,

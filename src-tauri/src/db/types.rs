@@ -33,6 +33,9 @@ pub struct Account {
     pub auto_sync_rate_multiplier: bool,
     /// Protects this account from the bulk "remove errored upstreams" action.
     pub locked: bool,
+    /// Random, account-scoped seed for stable Codex fingerprint identifiers.
+    #[serde(skip_serializing, default)]
+    pub codex_fingerprint_seed: String,
     pub status: String,
     pub last_error: String,
     pub last_used_at: Option<String>,
@@ -65,6 +68,10 @@ pub struct NewAccount {
     pub rate_multiplier: Option<f64>,
     /// `None` keeps the existing value during upsert.
     pub auto_sync_rate_multiplier: Option<bool>,
+    /// System-managed Codex fingerprint seed restored from an Aether backup.
+    /// Existing accounts keep their current seed; new accounts accept only a
+    /// valid, non-nil UUID and otherwise generate a fresh one.
+    pub codex_fingerprint_seed: Option<String>,
 }
 
 #[derive(Debug, Clone)]

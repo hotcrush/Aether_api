@@ -323,6 +323,7 @@ fn migrates_legacy_account_table_with_routing_defaults() {
     let db = Db::new(&path).unwrap();
     let account = db.get_account("legacy").unwrap().unwrap();
     assert!(account.models.is_empty());
+    assert!(!account.codex_fingerprint_seed.is_empty());
     assert_eq!(account.weight, 1);
     assert_eq!(account.api_key, "sk-legacy");
     drop(db);

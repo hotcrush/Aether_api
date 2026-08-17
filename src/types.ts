@@ -143,6 +143,7 @@ export interface ProxyInfo {
   pricing_updated_at: string
   pricing_source: string
   account_capacities: Record<string, number>
+  account_cooldowns?: Record<string, number>
 }
 
 export type RequestLogStatus = 'pending' | 'success' | 'retry' | 'error' | 'cancelled'

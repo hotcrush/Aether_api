@@ -322,7 +322,7 @@ export function SettingsPage({ onOpenTrash, codex }: SettingsPageProps) {
               <ShieldCheck size={16} />
               <div>
                 <span className="settings-row-label">OAuth 设备指纹收敛</span>
-                <span className="settings-row-desc">减少共享账号向 OpenAI 暴露的设备和会话数量；默认保留每个 Codex 会话的独立线程</span>
+                <span className="settings-row-desc">减少共享账号向 OpenAI 暴露的设备和会话数量；默认关闭，不改写客户端原始标识</span>
               </div>
             </div>
             <div className="settings-segmented" aria-label="OAuth 设备指纹收敛模式">

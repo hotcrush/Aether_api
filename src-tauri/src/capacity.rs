@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Default)]
 pub struct CapacityRegistry {
@@ -60,6 +61,47 @@ pub struct CapacityLease {
 impl Drop for CapacityLease {
     fn drop(&mut self) {
         self.registry.release(&self.account_id);
+    }
+}
+
+/// Shared in-memory cooldown state, exposed to the UI so users can see which
+/// accounts are cooling down and for how long, without restarting the app.
+#[derive(Debug, Default)]
+pub struct CooldownRegistry {
+    until: Mutex<HashMap<String, Instant>>,
+}
+
+impl CooldownRegistry {
+    /// Records that `account_id` is cooling down for `duration`, extending the
+    /// current deadline when a longer cooldown is applied.
+    pub fn mark(&self, account_id: &str, duration: Duration) {
+        let until = Instant::now() + duration;
+        let mut active = self.until.lock().unwrap();
+        let entry = active.entry(account_id.to_string()).or_insert(until);
+        if until > *entry {
+            *entry = until;
+        }
+    }
+
+    pub fn clear(&self, account_id: &str) {
+        self.until.lock().unwrap().remove(account_id);
+    }
+
+    /// Returns a map of `account_id -> remaining seconds` for accounts that
+    /// are still cooling down; expired entries are pruned on read.
+    pub fn snapshot(&self) -> HashMap<String, u64> {
+        let now = Instant::now();
+        let mut active = self.until.lock().unwrap();
+        active.retain(|_, until| *until > now);
+        active
+            .iter()
+            .map(|(account_id, until)| {
+                (
+                    account_id.clone(),
+                    until.saturating_duration_since(now).as_secs(),
+                )
+            })
+            .collect()
     }
 }
 

@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, KeyRound, Lock, Pencil, RefreshCw, Trash2, Unlock } from 'lucide-react'
+import { Activity, AlertTriangle, ChevronLeft, ChevronRight, Clock, ExternalLink, Info, KeyRound, Lock, Pencil, RefreshCw, Trash2, Unlock } from 'lucide-react'
 import { useState } from 'react'
 import { formatExpiry } from '../lib/time'
 import type { Account, QuotaQueryState, RelayUsageQueryState } from '../types'
@@ -64,6 +64,13 @@ function formatCountdown(resetsAt: number): string {
   return '< 1m 自动恢复'
 }
 
+function formatCooldown(seconds: number) {
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`
+}
+
 interface AccountTableProps {
   accounts: Account[]
   hasAccounts: boolean
@@ -73,11 +80,13 @@ interface AccountTableProps {
   quotaStates: Record<string, QuotaQueryState>
   relayUsageStates: Record<string, RelayUsageQueryState>
   accountCapacities: Record<string, number>
+  accountCooldowns: Record<string, number>
   onRetry: () => void
   onToggle: (account: Account) => void
   onTest: (account: Account) => void
   onRefresh: (account: Account) => void
   onEdit: (account: Account) => void
+  onDetail: (account: Account) => void
   onOpenRelay: (account: Account) => void
   onQuota: (account: Account) => void
   onRelayUsage: (account: Account) => void
@@ -99,11 +108,13 @@ export function AccountTable({
   quotaStates,
   relayUsageStates,
   accountCapacities,
+  accountCooldowns,
   onRetry,
   onToggle,
   onTest,
   onRefresh,
   onEdit,
+  onDetail,
   onOpenRelay,
   onQuota,
   onRelayUsage,
@@ -147,10 +158,12 @@ export function AccountTable({
                 quotaState={quotaStates[account.id]}
                 relayUsageState={relayUsageStates[account.id]}
                 currentConcurrency={accountCapacities[account.id] ?? 0}
+                cooldownRemaining={accountCooldowns[account.id] ?? 0}
                 onToggle={onToggle}
                 onTest={onTest}
                 onRefresh={onRefresh}
                 onEdit={onEdit}
+                onDetail={onDetail}
                 onOpenRelay={onOpenRelay}
                 onQuota={onQuota}
                 onRelayUsage={onRelayUsage}
@@ -218,10 +231,12 @@ interface AccountRowProps {
   quotaState?: QuotaQueryState
   relayUsageState?: RelayUsageQueryState
   currentConcurrency: number
+  cooldownRemaining: number
   onToggle: (account: Account) => void
   onTest: (account: Account) => void
   onRefresh: (account: Account) => void
   onEdit: (account: Account) => void
+  onDetail: (account: Account) => void
   onOpenRelay: (account: Account) => void
   onQuota: (account: Account) => void
   onRelayUsage: (account: Account) => void
@@ -240,10 +255,12 @@ function AccountRow({
   quotaState,
   relayUsageState,
   currentConcurrency,
+  cooldownRemaining,
   onToggle,
   onTest,
   onRefresh,
   onEdit,
+  onDetail,
   onOpenRelay,
   onQuota,
   onRelayUsage,
@@ -278,7 +295,12 @@ function AccountRow({
       <td className="col-account">
         <div className="account-name" data-tooltip={account.name || undefined}>
           {account.name || '未命名'}
-          {account.locked && <span className="account-lock-badge" data-tooltip="已锁定，批量移除报错上游时保留" aria-label="已锁定"><Lock size={11} /></span>}
+          {account.locked && <span className="account-lock-badge" data-tooltip="已锁定，置顶显示，批量移除报错上游时保留" aria-label="已锁定"><Lock size={11} /></span>}
+          {cooldownRemaining > 0 && (
+            <span className="account-cooldown-badge" data-tooltip={`冷却中，剩余 ${formatCooldown(cooldownRemaining)} 后自动恢复`} aria-label="冷却中">
+              <Clock size={11} /> {formatCooldown(cooldownRemaining)}
+            </span>
+          )}
         </div>
         {parsedErr ? (
           <div
@@ -373,6 +395,14 @@ function AccountRow({
         <div className="row-actions">
           <button
             className="icon-btn"
+            onClick={() => onDetail(account)}
+            data-tooltip="账号详情"
+            aria-label="账号详情"
+          >
+            <Info size={16} />
+          </button>
+          <button
+            className="icon-btn"
             onClick={() => onTest(account)}
             disabled={testBusy}
             data-tooltip="测试连接"
@@ -417,7 +447,7 @@ function AccountRow({
             className="icon-btn"
             onClick={() => onToggleLock(account)}
             disabled={busyActions.has(`lock:${account.id}`)}
-            data-tooltip={account.locked ? '解锁账号' : '锁定账号（批量移除报错上游时保留）'}
+            data-tooltip={account.locked ? '解锁账号' : '锁定账号（置顶显示，批量移除报错上游时保留）'}
             aria-label={account.locked ? '解锁账号' : '锁定账号'}
             aria-pressed={account.locked}
           >

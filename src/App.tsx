@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { AccountTable } from './components/AccountTable'
+import { AccountDetailDialog } from './components/AccountDetailDialog'
 import { AccountToolbar } from './components/AccountToolbar'
 import { ApiKeyDialog } from './components/ApiKeyDialog'
 import { AppHeader } from './components/AppHeader'
@@ -160,6 +161,7 @@ export default function App() {
   const [clipboardCandidates, setClipboardCandidates] = useState<ClipboardImportCandidate[]>([])
   const [relayOpen, setRelayOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<Account | null>(null)
+  const [detailTarget, setDetailTarget] = useState<Account | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null)
   const [resetKeyOpen, setResetKeyOpen] = useState(false)
   const [trashOpen, setTrashOpen] = useState(false)
@@ -924,7 +926,7 @@ export default function App() {
     try {
       const updated = await setAccountLocked(account.id, locked)
       if (!updated) throw new Error('上游不存在')
-      notify(locked ? '上游已锁定，批量移除报错上游时会保留' : '上游已解锁')
+      notify(locked ? '上游已锁定，已置顶显示' : '上游已解锁')
       await refreshData()
     } catch (error) {
       notify(errorText(error), true)
@@ -1510,10 +1512,12 @@ export default function App() {
           quotaStates={quotaStates}
           relayUsageStates={relayUsageStates}
           accountCapacities={proxy?.account_capacities ?? {}}
+          accountCooldowns={proxy?.account_cooldowns ?? {}}
           onRetry={retryLoad}
           onToggle={(account) => runAccountAction('toggle', account)}
           onTest={(account) => runAccountAction('test', account)}
           onEdit={setEditTarget}
+          onDetail={setDetailTarget}
           onOpenRelay={openRelayWebsite}
           onRefresh={(account) => runAccountAction('refresh', account)}
           onQuota={queryQuota}
@@ -1536,7 +1540,7 @@ export default function App() {
         onAccountsImported={handlePickupImported}
       />
       ) : activeTab === 'logs' ? (
-      <LoggerPage />
+      <LoggerPage accounts={accounts} />
       ) : activeTab === 'market' ? (
       <MarketMonitorPage
         initialSection={marketSection}
@@ -1608,6 +1612,10 @@ export default function App() {
         onClose={() => setEditTarget(null)}
         onSaved={refreshData}
         notify={notify}
+      />
+      <AccountDetailDialog
+        account={detailTarget}
+        onClose={() => setDetailTarget(null)}
       />
       <OpenAIOAuthDialog
         open={openaiOauthOpen}

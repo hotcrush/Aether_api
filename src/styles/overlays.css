@@ -434,6 +434,69 @@ textarea {
 
 .oauth-dialog-intro > svg { flex: 0 0 auto; color: var(--primary); }
 
+/* Account detail dialog */
+.account-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.account-detail-name {
+  font-size: 15px;
+  font-weight: 720;
+  color: var(--text);
+}
+
+.account-detail-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.account-detail-list {
+  margin: 0;
+}
+
+.account-detail-row {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-detail-row dt {
+  color: #48545f;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.account-detail-row dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.account-detail-error {
+  margin-top: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .oauth-step {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);

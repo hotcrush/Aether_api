@@ -23,6 +23,7 @@ fn test_state() -> ProxyState {
         capacity: Arc::new(CapacityRegistry::default()),
         relay_capacity: Arc::new(CapacityRegistry::default()),
         cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),
+        cooldown_state: Arc::new(CooldownRegistry::default()),
         stream_quarantines: Cache::builder().time_to_live(STREAM_QUARANTINE_TTL).build(),
         quota_snapshot_throttle: Cache::builder()
             .time_to_live(QUOTA_SNAPSHOT_THROTTLE)
@@ -30,6 +31,10 @@ fn test_state() -> ProxyState {
         sticky_routes: Cache::builder()
             .time_to_idle(STICKY_ROUTE_TTL)
             .max_capacity(MAX_STICKY_ROUTES)
+            .build(),
+        codex_turn_state_origins: Cache::builder()
+            .time_to_idle(STICKY_ROUTE_TTL)
+            .max_capacity(MAX_CODEX_TURN_STATE_ORIGINS)
             .build(),
         weighted_schedules: Mutex::new(HashMap::new()),
         refresh_locks: Mutex::new(HashMap::new()),
@@ -45,6 +50,45 @@ fn responses_capability(model: &str) -> RequestCapability {
         model: Some(model.to_string()),
         image_generation: false,
     }
+}
+
+#[test]
+fn codex_turn_state_is_scoped_to_the_oauth_account_that_created_it() {
+    let state = test_state();
+    let first = scheduling_account("first", 1);
+    let second = scheduling_account("second", 1);
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        "x-codex-turn-state",
+        HeaderValue::from_static("opaque-state-1"),
+    );
+    state.note_codex_turn_state(Some(42), &first, &response_headers);
+
+    let mut same_account = response_headers.clone();
+    state.guard_codex_turn_state(Some(42), &first, &mut same_account);
+    assert!(same_account.get("x-codex-turn-state").is_some());
+
+    let mut failover = response_headers.clone();
+    state.guard_codex_turn_state(Some(42), &second, &mut failover);
+    assert!(failover.get("x-codex-turn-state").is_none());
+
+    let mut api_key = response_headers;
+    let mut api_key_account = second;
+    api_key_account.account_type = "api_key".to_string();
+    state.guard_codex_turn_state(Some(42), &api_key_account, &mut api_key);
+    assert!(api_key.get("x-codex-turn-state").is_some());
+}
+
+#[test]
+fn compact_sse_uses_first_terminal_and_supports_multiline_data() {
+    let sse = concat!(
+        "data: {\"type\":\"response.created\"}\r\n\r\n",
+        "data: {\"type\":\"response.completed\",\r\n",
+        "data:  \"response\":{\"id\":\"first\"}}\r\n\r\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"late\"}}\r\n\r\n",
+    );
+    let completed = completed_response_from_sse(sse).unwrap();
+    assert_eq!(completed.get("id").and_then(Value::as_str), Some("first"));
 }
 
 #[test]
@@ -178,6 +222,7 @@ fn scheduling_account(id: &str, priority: i64) -> Account {
         rate_multiplier: 1.0,
         auto_sync_rate_multiplier: false,
         locked: false,
+        codex_fingerprint_seed: String::new(),
         chatgpt_account_id: String::new(),
         chatgpt_user_id: String::new(),
         email: String::new(),

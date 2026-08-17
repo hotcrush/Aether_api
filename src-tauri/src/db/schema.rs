@@ -36,6 +36,7 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
         ("rate_multiplier", "REAL NOT NULL DEFAULT 1.0"),
         ("auto_sync_rate_multiplier", "INTEGER NOT NULL DEFAULT 0"),
         ("locked", "INTEGER NOT NULL DEFAULT 0"),
+        ("codex_fingerprint_seed", "TEXT NOT NULL DEFAULT ''"),
         ("last_error", "TEXT NOT NULL DEFAULT ''"),
         ("last_used_at", "TEXT"),
         ("request_count", "INTEGER NOT NULL DEFAULT 0"),
@@ -110,7 +111,32 @@ pub(super) fn initialize(conn: &Connection) -> SqlResult<()> {
             total_requests = (SELECT COALESCE(SUM(request_count), 0) FROM accounts)
           WHERE total_tokens = 0 AND input_tokens = 0 AND output_tokens = 0
             AND total_cost = 0.0 AND total_requests = 0;",
-    )
+    )?;
+
+    // Older databases have no account-scoped Codex seed. Generate it once so
+    // fingerprint values stay stable across restarts and differ across
+    // independent deployments, regardless of their local account IDs.
+    let mut stmt = conn.prepare("SELECT id, codex_fingerprint_seed FROM accounts")?;
+    let ids = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            ))
+        })?
+        .collect::<SqlResult<Vec<_>>>()?;
+    drop(stmt);
+    for (id, seed) in ids {
+        let valid = uuid::Uuid::parse_str(seed.trim()).is_ok_and(|seed| !seed.is_nil());
+        if valid {
+            continue;
+        }
+        conn.execute(
+            "UPDATE accounts SET codex_fingerprint_seed = ?1 WHERE id = ?2",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), id],
+        )?;
+    }
+    Ok(())
 }
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> SqlResult<bool> {

@@ -2,6 +2,7 @@ use super::*;
 use axum::extract::ws::{Message as ClientMessage, WebSocket};
 use axum::http::header::AUTHORIZATION;
 use futures::SinkExt;
+use std::collections::HashSet;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_socks::tcp::Socks5Stream;
@@ -29,6 +30,7 @@ struct PreparedHttpBridgeTurn {
     bootstrap: Bytes,
     response_headers: reqwest::header::HeaderMap,
     status: u16,
+    replay_input: Option<Vec<Value>>,
 }
 
 enum ConnectedTransport {
@@ -300,7 +302,15 @@ async fn connect_selected_upstream(
         if use_http_bridge {
             let prepared = tokio::time::timeout(
                 HTTP_BRIDGE_STARTUP_TIMEOUT,
-                prepare_http_bridge_turn(state, &ready, uri, inbound_headers, first_request),
+                prepare_http_bridge_turn(
+                    state,
+                    &ready,
+                    uri,
+                    inbound_headers,
+                    route_key,
+                    first_request,
+                    None,
+                ),
             )
             .await;
             let prepared = match prepared {
@@ -343,6 +353,7 @@ async fn connect_selected_upstream(
                 log.mark_response(prepared.status);
             }
             persist_codex_quota_headers(state, &ready, &prepared.response_headers, false);
+            state.note_codex_turn_state(route_key, &ready, &prepared.response_headers);
             state.clear_cooldown(&ready.id, &capability);
             if attempt_started.elapsed() <= STICKY_ROUTE_MAX_FIRST_EVENT_LATENCY {
                 state.bind_route(route_key, &ready.id);
@@ -378,10 +389,12 @@ async fn connect_selected_upstream(
         } else {
             first_request.to_string()
         };
+        let mut guarded_headers = inbound_headers.clone();
+        state.guard_codex_turn_state(route_key, &ready, &mut guarded_headers);
         let prepared_fingerprint = crate::codex_fingerprint::prepare(
             &ready,
             state.codex_fingerprint.load().mode,
-            inbound_headers,
+            &guarded_headers,
             first_request.as_bytes(),
         );
         let upstream_headers = prepared_fingerprint.headers;
@@ -552,6 +565,7 @@ async fn connect_selected_upstream(
             log.mark_response(StatusCode::SWITCHING_PROTOCOLS.as_u16());
         }
         persist_codex_quota_headers(state, &ready, &response_headers, false);
+        state.note_codex_turn_state(route_key, &ready, &response_headers);
         state.clear_cooldown(&ready.id, &capability);
         if attempt_started.elapsed() <= STICKY_ROUTE_MAX_FIRST_EVENT_LATENCY {
             state.bind_route(route_key, &ready.id);
@@ -612,16 +626,176 @@ fn should_use_http_bridge(account: &Account, request_bytes: usize) -> bool {
         .is_some_and(|host| host.eq_ignore_ascii_case("api.openai.com"))
 }
 
-fn prepare_http_bridge_body(request: &str) -> Result<Vec<u8>, String> {
+fn prepare_http_bridge_body_with_replay(
+    request: &str,
+    previous_replay_input: Option<&[Value]>,
+) -> Result<Vec<u8>, String> {
     let mut value: Value = serde_json::from_str(request)
         .map_err(|error| format!("Codex WebSocket 请求不是有效 JSON: {error}"))?;
+    let replay_input = build_http_bridge_replay_input(previous_replay_input, &value)?;
+    let needs_replay = http_bridge_request_needs_replay(&value);
     let object = value
         .as_object_mut()
         .ok_or_else(|| "response.create 必须是 JSON 对象".to_string())?;
     object.remove("type");
     object.remove("generate");
+    object.remove("previous_response_id");
+    if needs_replay {
+        if let Some(replay_input) = replay_input {
+            object.insert("input".to_string(), Value::Array(replay_input));
+        }
+    }
     object.insert("stream".to_string(), Value::Bool(true));
     serde_json::to_vec(&value).map_err(|error| format!("生成 HTTP SSE 请求失败: {error}"))
+}
+
+fn build_http_bridge_replay_input(
+    previous_replay_input: Option<&[Value]>,
+    request: &Value,
+) -> Result<Option<Vec<Value>>, String> {
+    let Some(object) = request.as_object() else {
+        return Err("response.create 必须是 JSON 对象".to_string());
+    };
+    let current_input = extract_http_bridge_input(object.get("input"));
+    let has_previous_response_id = object
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.trim().is_empty());
+    let has_tool_output = current_input
+        .as_ref()
+        .is_some_and(|items| items.iter().any(is_http_bridge_tool_output));
+    let Some(previous) = previous_replay_input else {
+        return Ok(current_input);
+    };
+    if !has_previous_response_id && !has_tool_output {
+        return Ok(current_input.or_else(|| Some(previous.to_vec())));
+    }
+    let Some(current) = current_input else {
+        return Ok(Some(previous.to_vec()));
+    };
+    if current.is_empty() {
+        return Ok(Some(previous.to_vec()));
+    }
+    if current.starts_with(previous) {
+        return Ok(Some(current));
+    }
+    let mut merged = previous.to_vec();
+    merged.extend(current);
+    Ok(Some(merged))
+}
+
+fn http_bridge_request_needs_replay(request: &Value) -> bool {
+    let Some(object) = request.as_object() else {
+        return false;
+    };
+    let has_previous_response_id = object
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.trim().is_empty());
+    let has_tool_output = extract_http_bridge_input(object.get("input"))
+        .is_some_and(|items| items.iter().any(is_http_bridge_tool_output));
+    has_previous_response_id || has_tool_output
+}
+
+fn extract_http_bridge_input(input: Option<&Value>) -> Option<Vec<Value>> {
+    let input = input?;
+    match input {
+        Value::Array(items) => Some(items.clone()),
+        value => Some(vec![value.clone()]),
+    }
+}
+
+fn is_http_bridge_tool_output(value: &Value) -> bool {
+    matches!(
+        value.get("type").and_then(Value::as_str),
+        Some(
+            "function_call_output"
+                | "tool_search_output"
+                | "custom_tool_call_output"
+                | "mcp_tool_call_output"
+        )
+    )
+}
+
+fn is_http_bridge_tool_context(value: &Value) -> bool {
+    matches!(
+        value.get("type").and_then(Value::as_str),
+        Some(
+            "tool_call"
+                | "function_call"
+                | "local_shell_call"
+                | "tool_search_call"
+                | "custom_tool_call"
+                | "mcp_tool_call"
+        )
+    )
+}
+
+#[derive(Default)]
+struct HttpBridgeReplayCollector {
+    items: Vec<Value>,
+    seen: HashSet<String>,
+}
+
+impl HttpBridgeReplayCollector {
+    fn observe_event(&mut self, event: &[u8]) {
+        let Ok(text) = std::str::from_utf8(event) else {
+            return;
+        };
+        let normalized = text.replace("\r\n", "\n");
+        let data = normalized
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let Ok(value) = serde_json::from_str::<Value>(data.trim()) else {
+            return;
+        };
+        let mut candidates = Vec::new();
+        match value.get("type").and_then(Value::as_str) {
+            Some("response.output_item.done") => {
+                if let Some(item) = value.get("item") {
+                    candidates.push(item.clone());
+                }
+            }
+            Some("response.completed" | "response.done") => {
+                let output = value
+                    .get("response")
+                    .and_then(|response| response.get("output"))
+                    .or_else(|| value.get("output"));
+                if let Some(items) = output.and_then(Value::as_array) {
+                    candidates.extend(items.iter().cloned());
+                }
+            }
+            _ => {}
+        }
+        for item in candidates {
+            if !is_http_bridge_tool_context(&item) {
+                continue;
+            }
+            let key = item
+                .get("id")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("call_id").and_then(Value::as_str))
+                .map(str::to_string)
+                .unwrap_or_else(|| item.to_string());
+            if self.seen.insert(key) {
+                self.items.push(item);
+            }
+        }
+    }
+
+    fn append_to(&self, replay_input: &mut Option<Vec<Value>>) {
+        if self.items.is_empty() {
+            return;
+        }
+        let input = replay_input.get_or_insert_with(Vec::new);
+        for item in &self.items {
+            if !input.iter().any(|existing| existing == item) {
+                input.push(item.clone());
+            }
+        }
+    }
 }
 
 async fn prepare_http_bridge_turn(
@@ -629,10 +803,19 @@ async fn prepare_http_bridge_turn(
     account: &Account,
     uri: &Uri,
     inbound_headers: &HeaderMap,
+    route_key: Option<u64>,
     request: &str,
+    previous_replay_input: Option<&[Value]>,
 ) -> Result<PreparedHttpBridgeTurn, PrepareResponseError> {
-    let body = prepare_http_bridge_body(request).map_err(PrepareResponseError::Upstream)?;
+    let parsed_request: Value = serde_json::from_str(request).map_err(|error| {
+        PrepareResponseError::Upstream(format!("Codex WebSocket 请求不是有效 JSON: {error}"))
+    })?;
+    let replay_input = build_http_bridge_replay_input(previous_replay_input, &parsed_request)
+        .map_err(PrepareResponseError::Upstream)?;
+    let body = prepare_http_bridge_body_with_replay(request, previous_replay_input)
+        .map_err(PrepareResponseError::Upstream)?;
     let mut headers = inbound_headers.clone();
+    state.guard_codex_turn_state(route_key, account, &mut headers);
     headers.remove("openai-beta");
     headers.insert(
         header::ACCEPT,
@@ -686,6 +869,7 @@ async fn prepare_http_bridge_turn(
         bootstrap,
         response_headers,
         status: status.as_u16(),
+        replay_input,
     })
 }
 
@@ -841,7 +1025,7 @@ fn websocket_upstream_request(
     }
     if let Some(value) = inbound_headers.get("openai-beta") {
         headers.insert("openai-beta", value.clone());
-    } else {
+    } else if account.account_type == "oauth" {
         headers.insert(
             "openai-beta",
             HeaderValue::from_static(RESPONSES_WEBSOCKETS_BETA),
@@ -1044,11 +1228,16 @@ async fn relay_http_bridge(
     first_capacity_lease: UpstreamCapacityLease,
 ) -> Result<(), String> {
     let mut capacity_lease = Some(first_capacity_lease);
+    let mut replay_input = prepared.replay_input.clone();
     loop {
-        match relay_http_bridge_turn(client, &mut prepared, &mut observer).await? {
+        let mut replay_collector = HttpBridgeReplayCollector::default();
+        match relay_http_bridge_turn(client, &mut prepared, &mut observer, &mut replay_collector)
+            .await?
+        {
             HttpBridgeTurnEnd::ClientClosed | HttpBridgeTurnEnd::UpstreamFailed => return Ok(()),
             HttpBridgeTurnEnd::Completed | HttpBridgeTurnEnd::Cancelled => {}
         }
+        replay_collector.append_to(&mut replay_input);
         capacity_lease.take();
 
         let Some(next_request) = receive_next_http_bridge_request(client).await? else {
@@ -1081,7 +1270,15 @@ async fn relay_http_bridge(
         let attempt_log = request_log.begin_attempt(Some(account), 1);
         let next_prepared = tokio::time::timeout(
             HTTP_BRIDGE_STARTUP_TIMEOUT,
-            prepare_http_bridge_turn(state, account, uri, inbound_headers, &next_request),
+            prepare_http_bridge_turn(
+                state,
+                account,
+                uri,
+                inbound_headers,
+                route_key,
+                &next_request,
+                replay_input.as_deref(),
+            ),
         )
         .await;
         prepared = match next_prepared {
@@ -1137,6 +1334,7 @@ async fn relay_http_bridge(
             },
             true,
         );
+        replay_input = prepared.replay_input.clone();
         capacity_lease = Some(next_capacity_lease);
     }
 }
@@ -1145,6 +1343,7 @@ async fn relay_http_bridge_turn(
     client: &mut WebSocket,
     prepared: &mut PreparedHttpBridgeTurn,
     observer: &mut StreamBodyObserver,
+    replay_collector: &mut HttpBridgeReplayCollector,
 ) -> Result<HttpBridgeTurnEnd, String> {
     let mut buffer = std::mem::take(&mut prepared.bootstrap).to_vec();
     loop {
@@ -1153,6 +1352,7 @@ async fn relay_http_bridge_turn(
             let terminal = stream_has_terminal_event(&event);
             let failed = stream_payload_error(&event).is_some();
             observer.observe_event(&event);
+            replay_collector.observe_event(&event);
             let sanitized = sanitize_capacity_shed_sse_event(&event);
             if let Some(payload) = sse_event_payload(&sanitized)? {
                 client
@@ -1291,6 +1491,8 @@ async fn relay_websockets(
 ) -> Result<(), String> {
     let mut observer = Some(first_observer);
     let mut capacity_lease = Some(first_capacity_lease);
+    let mut guarded_headers = inbound_headers.clone();
+    state.guard_codex_turn_state(route_key, account, &mut guarded_headers);
     let mut first_event_deadline = None;
     for first_message in first_messages {
         match first_message {
@@ -1345,7 +1547,7 @@ async fn relay_websockets(
                             let prepared = crate::codex_fingerprint::prepare(
                                 account,
                                 state.codex_fingerprint.load().mode,
-                                inbound_headers,
+                                &guarded_headers,
                                 text.as_bytes(),
                             );
                             text = String::from_utf8(prepared.body)
@@ -1629,19 +1831,55 @@ mod tests {
     }
 
     #[test]
-    fn converts_response_create_into_http_responses_body() {
-        let body = prepare_http_bridge_body(
+    fn converts_response_create_into_http_responses_body_without_ws_only_fields() {
+        let body = prepare_http_bridge_body_with_replay(
             r#"{"type":"response.create","generate":true,"model":"gpt-5.6","stream":false,"previous_response_id":"resp_1"}"#,
+            None,
         )
         .unwrap();
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert!(value.get("type").is_none());
         assert!(value.get("generate").is_none());
         assert_eq!(value.get("stream"), Some(&Value::Bool(true)));
+        assert!(value.get("previous_response_id").is_none());
+    }
+
+    #[test]
+    fn rebuilds_http_bridge_input_when_previous_response_id_is_present() {
+        let previous = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "first"}]
+        })];
+        let body = prepare_http_bridge_body_with_replay(
+            r#"{"type":"response.create","model":"gpt-5.6","previous_response_id":"resp_1","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"second"}]}]}"#,
+            Some(&previous),
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert!(value.get("previous_response_id").is_none());
         assert_eq!(
-            value.get("previous_response_id").and_then(Value::as_str),
-            Some("resp_1")
+            value.get("input").and_then(Value::as_array).map(Vec::len),
+            Some(2)
         );
+    }
+
+    #[test]
+    fn collects_tool_call_context_for_http_bridge_replay() {
+        let mut collector = HttpBridgeReplayCollector::default();
+        collector.observe_event(
+            br#"data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"shell","arguments":"{}"}}
+
+"#,
+        );
+        collector.observe_event(
+            br#"data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"shell","arguments":"{}"}}
+
+"#,
+        );
+        let mut replay = Some(vec![json!({"type": "message", "role": "user"})]);
+        collector.append_to(&mut replay);
+        assert_eq!(replay.as_ref().map(Vec::len), Some(2));
     }
 
     #[test]
@@ -1669,6 +1907,7 @@ mod tests {
             rate_multiplier: 1.0,
             auto_sync_rate_multiplier: false,
             locked: false,
+            codex_fingerprint_seed: String::new(),
             chatgpt_account_id: String::new(),
             chatgpt_user_id: String::new(),
             email: String::new(),

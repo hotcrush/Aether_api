@@ -38,6 +38,36 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-17
+
+### Added
+
+- 锁定的上游账号在列表中自动置顶显示
+- 请求日志新增按上游账号（OAuth/中转站）筛选
+- 上游账号新增「详情」视图，展示首次导入时间与最近更新时间
+- 请求日志为进行中的请求新增会话管道状态指示，实时显示管道已通或建立中
+- 请求日志合并同 request_id 的多条尝试，并以「尝试 N/M」标注尝试序号与总数
+- 上游账号列表新增「冷却中」标识并显示剩余冷却时间，冷却到期自动恢复，无需重启
+
+### Changed
+
+- Codex OAuth 设备指纹收敛默认值改为「关闭」，未显式配置的账号恢复透传客户端原始标识 **[Breaking]**
+- 统一 Codex 指纹收敛在请求头、请求体、HTTP bridge 和上游 WebSocket 握手中的身份值
+- 收紧 429 冷却：默认 30 秒、最长 120 秒，减少单个账号被本地冷却锁定的时长
+
+### Fixed
+
+- 修复不同实例的 OAuth 账号因本地账号 ID 相同而复用 Codex installation/session/thread 指纹
+- 修复账号备份恢复后 Codex 指纹 seed 变化，恢复时保留合法 seed，普通新账号仍生成独立 seed
+- 修复 Codex 会话收敛时请求头 `session_id` 与请求体 `prompt_cache_key` 不一致导致的缓存亲和失效
+- 保留显式 `prompt_cache_key` 覆盖值，并对异常指纹种子采取透传策略
+- 按官方 Codex 身份图同步 `session-id`、`thread-id`、`x-client-request-id` 与 UUIDv7 window 标识
+- 修复 Codex `x-codex-turn-state` 在 OAuth 故障切换后跨账号回放，API Key 中转保持透明
+- 修复 HTTP SSE bridge 转发 `previous_response_id` 导致中转站返回 400
+- 修复 WebSocket HTTP bridge 多轮请求丢失输入上下文和工具调用上下文
+- 修复 SSE 终态解析未遵循首个终端事件和多行 `data` 规则的问题
+- 修复 WebSocket API Key 上游未提供 Beta 头时被强制注入 OAuth 专用 Beta 值
+
 ## [0.1.1] - 2026-08-16
 
 ### Changed

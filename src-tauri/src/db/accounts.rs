@@ -11,7 +11,7 @@ pub(super) fn query_active_accounts(conn: &Connection) -> SqlResult<Vec<Account>
                 client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                 expires_at, priority, models, weight, status, last_error, last_used_at,
                 request_count, created_at, updated_at, concurrency, rate_multiplier,
-                auto_sync_rate_multiplier, locked
+                auto_sync_rate_multiplier, locked, codex_fingerprint_seed
            FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
     )?;
     let rows = stmt.query_map([], account_from_row)?;
@@ -25,9 +25,9 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier, locked
+                    auto_sync_rate_multiplier, locked, codex_fingerprint_seed
                FROM accounts WHERE deleted_at IS NULL
-              ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, priority, created_at DESC",
+              ORDER BY CASE WHEN locked = 1 THEN 0 ELSE 1 END, CASE status WHEN 'active' THEN 0 ELSE 1 END, priority, created_at DESC",
             [],
         )
     }
@@ -38,7 +38,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier, locked
+                    auto_sync_rate_multiplier, locked, codex_fingerprint_seed
                FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
             [],
         )
@@ -56,7 +56,7 @@ impl Db {
                             client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                             expires_at, priority, models, weight, status, last_error, last_used_at,
                             request_count, created_at, updated_at, concurrency, rate_multiplier,
-                            auto_sync_rate_multiplier, locked
+                            auto_sync_rate_multiplier, locked, codex_fingerprint_seed
                        FROM accounts WHERE status = 'active' AND deleted_at IS NULL ORDER BY priority, created_at",
                 )?;
                 let rows = stmt.query_map([], account_from_row)?;
@@ -76,7 +76,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier, locked
+                    auto_sync_rate_multiplier, locked, codex_fingerprint_seed
                FROM accounts WHERE id = ?1 AND deleted_at IS NULL",
             [id],
             account_from_row,
@@ -154,6 +154,8 @@ impl Db {
             UpsertAction::Updated
         } else {
             let id = uuid::Uuid::new_v4().to_string();
+            let codex_fingerprint_seed = restored_fingerprint_seed(account)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let name = if account.name.trim().is_empty() {
                 default_account_name(account)
             } else {
@@ -164,8 +166,8 @@ impl Db {
                     id, name, account_type, api_key, access_token, refresh_token, id_token,
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+                    auto_sync_rate_multiplier, codex_fingerprint_seed, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
                             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
                 rusqlite::params![
                     id,
@@ -188,6 +190,7 @@ impl Db {
                     concurrency.unwrap_or(10),
                     rate_multiplier.unwrap_or(1.0),
                     auto_sync_rate_multiplier.unwrap_or(false),
+                    codex_fingerprint_seed,
                 ],
             )?;
             UpsertAction::Created
@@ -199,7 +202,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier, locked
+                    auto_sync_rate_multiplier, locked, codex_fingerprint_seed
                FROM accounts WHERE id = ?1",
             [id],
             account_from_row,
@@ -271,7 +274,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier, locked
+                    auto_sync_rate_multiplier, locked, codex_fingerprint_seed
                FROM accounts WHERE deleted_at IS NOT NULL
               ORDER BY deleted_at DESC",
             [],
@@ -472,7 +475,7 @@ impl Db {
                     client_id, base_url, chatgpt_account_id, chatgpt_user_id, email, plan_type,
                     expires_at, priority, models, weight, status, last_error, last_used_at,
                     request_count, created_at, updated_at, concurrency, rate_multiplier,
-                    auto_sync_rate_multiplier, locked
+                    auto_sync_rate_multiplier, locked, codex_fingerprint_seed
                FROM accounts
               WHERE status = 'active' AND deleted_at IS NULL
                 AND account_type = 'api_key' AND api_key <> '' AND base_url <> ''
@@ -487,6 +490,19 @@ impl Db {
         let data = accounts
             .into_iter()
             .map(|account| {
+                let mut extra = serde_json::Map::new();
+                if account.auto_sync_rate_multiplier {
+                    extra.insert(
+                        "upstream_billing_rate_sync_enabled".to_string(),
+                        Value::Bool(true),
+                    );
+                }
+                if account.account_type == "oauth" {
+                    extra.insert(
+                        "codex_fingerprint_seed".to_string(),
+                        Value::String(account.codex_fingerprint_seed.clone()),
+                    );
+                }
                 let credentials = if account.account_type == "oauth" {
                     json!({
                         "access_token": account.access_token,
@@ -514,11 +530,7 @@ impl Db {
                     "weight": account.weight,
                     "concurrency": account.concurrency,
                     "rate_multiplier": account.rate_multiplier,
-                    "extra": if account.auto_sync_rate_multiplier {
-                        json!({"upstream_billing_rate_sync_enabled": true})
-                    } else {
-                        json!({})
-                    },
+                    "extra": Value::Object(extra),
                     "credentials": credentials,
                 })
             })
@@ -531,6 +543,12 @@ impl Db {
             "accounts": data,
         }))
     }
+}
+
+fn restored_fingerprint_seed(account: &NewAccount) -> Option<String> {
+    let seed = account.codex_fingerprint_seed.as_deref()?.trim();
+    let parsed = uuid::Uuid::parse_str(seed).ok()?;
+    (!parsed.is_nil()).then(|| parsed.to_string())
 }
 
 fn account_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Account> {
@@ -578,6 +596,7 @@ fn account_from_row(row: &rusqlite::Row<'_>) -> SqlResult<Account> {
             .unwrap_or(1.0),
         auto_sync_rate_multiplier: row.get::<_, Option<bool>>(25)?.unwrap_or(false),
         locked: row.get::<_, Option<bool>>(26)?.unwrap_or(false),
+        codex_fingerprint_seed: row.get::<_, Option<String>>(27)?.unwrap_or_default(),
         status: row.get(17)?,
         last_error: row.get(18)?,
         last_used_at: row.get(19)?,

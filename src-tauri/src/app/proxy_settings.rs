@@ -191,6 +191,7 @@ pub(crate) fn get_proxy_info(state: tauri::State<AppState>) -> serde_json::Value
         "pricing_updated_at": pricing::PRICING_UPDATED_AT,
         "pricing_source": pricing::PRICING_SOURCE,
         "account_capacities": state.capacity.snapshot(),
+        "account_cooldowns": state.cooldown_state.snapshot(),
     })
 }
 

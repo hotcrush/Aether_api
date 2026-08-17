@@ -29,6 +29,7 @@ use futures::{Stream, StreamExt};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use moka::sync::Cache;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::num::NonZeroU32;
@@ -40,7 +41,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
-use crate::capacity::{CapacityLease, CapacityRegistry};
+use crate::capacity::{CapacityLease, CapacityRegistry, CooldownRegistry};
 use crate::codex_fingerprint::CodexFingerprintSettings;
 use crate::cost_guard::CostGuardSettings;
 use crate::db::{Account, Db, RequestLogStart, RequestLogUsage};
@@ -54,6 +55,7 @@ const CHATGPT_CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex
 const CHATGPT_CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
 const STICKY_ROUTE_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_STICKY_ROUTES: u64 = 4096;
+const MAX_CODEX_TURN_STATE_ORIGINS: u64 = 8192;
 const WEIGHTED_SCHEDULE_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_WEIGHTED_SCHEDULES: usize = 4096;
 const MAX_ACCOUNT_ATTEMPTS: usize = 3;
@@ -317,10 +319,15 @@ pub struct ProxyState {
     app_handle: Option<tauri::AppHandle>,
     capacity: Arc<CapacityRegistry>,
     relay_capacity: Arc<CapacityRegistry>,
+    cooldown_state: Arc<CooldownRegistry>,
     cooldowns: Cache<CooldownKey, Instant>,
     stream_quarantines: Cache<CooldownKey, Instant>,
     quota_snapshot_throttle: Cache<String, ()>,
     sticky_routes: Cache<u64, String>,
+    /// Exact Codex turn-state digests are bound to the OAuth account that
+    /// produced them. This prevents a failover account from replaying a
+    /// state blob minted under another account's identity.
+    codex_turn_state_origins: Cache<String, String>,
     weighted_schedules: Mutex<HashMap<SchedulerKey, WeightedSchedule>>,
     refresh_locks: Mutex<HashMap<String, Weak<AsyncMutex<()>>>>,
     /// Per-account token bucket rate limiter.
@@ -568,6 +575,72 @@ impl ProxyState {
         self.sticky_routes.get(&key)
     }
 
+    fn codex_turn_state_key(route_key: Option<u64>, state: &str) -> Option<String> {
+        let route_key = route_key?;
+        if state.is_empty() {
+            return None;
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"aether:codex-turn-state:v1:");
+        digest.update(route_key.to_be_bytes());
+        digest.update([0]);
+        digest.update(state.as_bytes());
+        Some(
+            digest
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+        )
+    }
+
+    pub(super) fn guard_codex_turn_state(
+        &self,
+        route_key: Option<u64>,
+        account: &Account,
+        headers: &mut HeaderMap,
+    ) {
+        if account.account_type != "oauth" {
+            return;
+        }
+        let Some(state) = headers
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok())
+        else {
+            return;
+        };
+        let Some(key) = Self::codex_turn_state_key(route_key, state) else {
+            return;
+        };
+        if let Some(origin_account_id) = self.codex_turn_state_origins.get(&key) {
+            if origin_account_id != account.id {
+                headers.remove("x-codex-turn-state");
+            }
+        }
+    }
+
+    pub(super) fn note_codex_turn_state(
+        &self,
+        route_key: Option<u64>,
+        account: &Account,
+        headers: &HeaderMap,
+    ) {
+        if account.account_type != "oauth" {
+            return;
+        }
+        let Some(state) = headers
+            .get("x-codex-turn-state")
+            .and_then(|value| value.to_str().ok())
+        else {
+            return;
+        };
+        let Some(key) = Self::codex_turn_state_key(route_key, state) else {
+            return;
+        };
+        self.codex_turn_state_origins
+            .insert(key, account.id.clone());
+    }
+
     fn bind_route(&self, key: Option<u64>, account_id: &str) {
         let Some(key) = key else { return };
         self.sticky_routes.insert(key, account_id.to_string());
@@ -589,6 +662,11 @@ impl ProxyState {
     }
 
     fn cool_down_key(&self, key: CooldownKey, duration: Duration) {
+        let account_id = match &key {
+            CooldownKey::Account(account_id) => account_id.as_str(),
+            CooldownKey::Capability { account_id, .. } => account_id.as_str(),
+        };
+        self.cooldown_state.mark(account_id, duration);
         Self::block_key(&self.cooldowns, key, duration);
     }
 
@@ -639,6 +717,7 @@ impl ProxyState {
     }
 
     fn clear_cooldown(&self, account_id: &str, capability: &RequestCapability) {
+        self.cooldown_state.clear(account_id);
         let keys = [
             CooldownKey::Account(account_id.to_string()),
             capability
@@ -743,6 +822,7 @@ pub async fn start_proxy_server(
     access_token: Arc<arc_swap::ArcSwap<String>>,
     running: Arc<AtomicBool>,
     capacity: Arc<CapacityRegistry>,
+    cooldown_state: Arc<CooldownRegistry>,
     cost_guard: Arc<arc_swap::ArcSwap<CostGuardSettings>>,
     image_generation: Arc<arc_swap::ArcSwap<ImageGenerationSettings>>,
     client: Arc<arc_swap::ArcSwap<reqwest::Client>>,
@@ -761,6 +841,7 @@ pub async fn start_proxy_server(
         app_handle: Some(app_handle),
         capacity,
         relay_capacity: Arc::new(CapacityRegistry::default()),
+        cooldown_state,
         cooldowns: Cache::builder().time_to_live(COOLDOWN_CACHE_TTL).build(),
         stream_quarantines: Cache::builder().time_to_live(STREAM_QUARANTINE_TTL).build(),
         quota_snapshot_throttle: Cache::builder()
@@ -769,6 +850,10 @@ pub async fn start_proxy_server(
         sticky_routes: Cache::builder()
             .time_to_idle(STICKY_ROUTE_TTL)
             .max_capacity(MAX_STICKY_ROUTES)
+            .build(),
+        codex_turn_state_origins: Cache::builder()
+            .time_to_idle(STICKY_ROUTE_TTL)
+            .max_capacity(MAX_CODEX_TURN_STATE_ORIGINS)
             .build(),
         weighted_schedules: Mutex::new(HashMap::new()),
         refresh_locks: Mutex::new(HashMap::new()),

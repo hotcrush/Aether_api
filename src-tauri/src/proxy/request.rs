@@ -259,6 +259,8 @@ pub(super) async fn proxy_handler(
         let codex_version = crate::codex_identity::current_version(&state.codex_version);
         loop {
             let client = state.client.load_full();
+            let mut upstream_headers = headers.clone();
+            state.guard_codex_turn_state(route_key, &ready, &mut upstream_headers);
             let response = match tokio::time::timeout_at(
                 startup_deadline,
                 send_upstream(
@@ -266,7 +268,7 @@ pub(super) async fn proxy_handler(
                     &ready,
                     &method,
                     &uri,
-                    &headers,
+                    &upstream_headers,
                     &body,
                     &codex_version,
                     state.codex_fingerprint.load().mode,
@@ -429,6 +431,7 @@ pub(super) async fn proxy_handler(
                 startup_deadline,
                 tokio::time::Instant::now() + UPSTREAM_FIRST_EVENT_TIMEOUT,
             );
+            let upstream_turn_state = response.headers().get("x-codex-turn-state").cloned();
             let (response, usage, completion_deferred) = match tokio::time::timeout_at(
                 first_event_deadline,
                 to_client_response(
@@ -503,6 +506,14 @@ pub(super) async fn proxy_handler(
 
             if let Some(log) = &attempt_log {
                 log.mark_response(status.as_u16());
+            }
+
+            if status.is_success() && capability.endpoint == EndpointFamily::Responses {
+                if let Some(state_header) = upstream_turn_state {
+                    let mut response_headers = HeaderMap::new();
+                    response_headers.insert("x-codex-turn-state", state_header);
+                    state.note_codex_turn_state(route_key, &ready, &response_headers);
+                }
             }
 
             state.clear_cooldown(&ready.id, &capability);
@@ -854,11 +865,14 @@ pub(super) fn response_cooldown(
     headers: &reqwest::header::HeaderMap,
 ) -> Duration {
     if status == StatusCode::TOO_MANY_REQUESTS {
-        return headers
+        let retry_after = headers
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| parse_retry_after(value, chrono::Utc::now()))
-            .unwrap_or_else(|| Duration::from_secs(60));
+            .unwrap_or_else(|| Duration::from_secs(30));
+        // Cap the 429 cooldown so a single account recovers quickly; prefer
+        // switching to other accounts instead of a long local lockout.
+        return retry_after.min(Duration::from_secs(120));
     }
     match status.as_u16() {
         401..=403 => Duration::from_secs(300),
